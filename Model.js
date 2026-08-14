@@ -19,7 +19,7 @@ function parseScan(raw) {
     parsed.root = String(parsed.root || "")
     parsed.displayRoot = String(parsed.displayRoot || parsed.root || "~/Work")
     parsed.rootExists = parsed.rootExists !== false
-    parsed.projects = Array.isArray(parsed.projects) ? parsed.projects : []
+    parsed.projects = Array.isArray(parsed.projects) ? parsed.projects.map(normalizeProject) : []
     parsed.error = String(parsed.error || "")
     return parsed
   } catch (e) {
@@ -28,6 +28,15 @@ function parseScan(raw) {
     failed.error = "Failed to read project state"
     return failed
   }
+}
+
+function normalizeProject(project) {
+  if (!project || typeof project !== "object") return project
+  project.summary = String(project.summary || "")
+  project.url = String(project.url || project.githubUrl || "")
+  project.omafileError = String(project.omafileError || "")
+  project.actions = Array.isArray(project.actions) ? project.actions : []
+  return project
 }
 
 function asInt(value) {
@@ -135,12 +144,50 @@ function filePathFromUrl(url) {
   return value
 }
 
+function projectUrl(project) {
+  if (!project) return ""
+  var explicit = String(project.url || "")
+  if (explicit !== "") return explicit
+  return String(project.githubUrl || "")
+}
+
+function isGitHubUrl(url) {
+  var value = String(url || "")
+  return value.indexOf("https://github.com/") === 0 || value.indexOf("http://github.com/") === 0
+}
+
+function urlActionLabel(project) {
+  return isGitHubUrl(projectUrl(project)) ? "Open GitHub" : "Open Site"
+}
+
+function urlActionIcon(project) {
+  return isGitHubUrl(projectUrl(project)) ? "󰊤" : "󰖟"
+}
+
 function actionList(project) {
-  return [
+  var actions = [
     { id: "terminal", label: "Open Terminal", icon: "󰆍" },
     { id: "editor", label: "Open Editor", icon: "󰷈" },
     { id: "folder", label: "Open Folder", icon: "󰉋" },
-    { id: "github", label: "Open GitHub", icon: "󰊤", enabled: !!(project && project.githubUrl) },
+    {
+      id: "url",
+      label: urlActionLabel(project),
+      icon: urlActionIcon(project),
+      enabled: projectUrl(project) !== ""
+    },
     { id: "copy", label: "Copy Path", icon: "󰆏" }
   ]
+  var extras = project && Array.isArray(project.actions) ? project.actions : []
+  for (var i = 0; i < extras.length; i++) {
+    var extra = extras[i] || {}
+    var command = String(extra.command || "")
+    if (command === "") continue
+    actions.push({
+      id: String(extra.id || ("omafile:" + i)),
+      label: String(extra.label || command),
+      icon: "󰐊",
+      command: command
+    })
+  }
+  return actions
 }

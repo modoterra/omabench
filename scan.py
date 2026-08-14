@@ -9,8 +9,11 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+OMAFILE_NAME = "Omafile"
 
 SKIP_DIR_NAMES = frozenset(
     {
@@ -53,6 +56,109 @@ def display_path(path: Path, home: Path) -> str:
         return "~/" + resolved.relative_to(home_resolved).as_posix()
     except ValueError:
         return str(resolved)
+
+
+def empty_omafile() -> dict:
+    return {
+        "present": False,
+        "name": "",
+        "summary": "",
+        "url": "",
+        "actions": [],
+        "error": "",
+    }
+
+
+def _optional_string(data: dict, key: str, errors: list[str]) -> str:
+    if key not in data:
+        return ""
+    value = data[key]
+    if not isinstance(value, str):
+        errors.append(f"{key} must be a string")
+        return ""
+    return value.strip()
+
+
+def _parse_actions(data: dict, errors: list[str]) -> list[dict]:
+    if "actions" not in data:
+        return []
+    raw_actions = data["actions"]
+    if not isinstance(raw_actions, list):
+        errors.append("actions must be an array")
+        return []
+    actions: list[dict] = []
+    for index, item in enumerate(raw_actions):
+        prefix = f"actions[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{prefix} must be a table")
+            continue
+        command = item.get("command")
+        if not isinstance(command, str) or command.strip() == "":
+            errors.append(f"{prefix}.command must be a string")
+            continue
+        label = item.get("label", command)
+        if not isinstance(label, str) or label.strip() == "":
+            errors.append(f"{prefix}.label must be a string")
+            continue
+        actions.append(
+            {
+                "id": f"omafile:{index}",
+                "label": label.strip(),
+                "command": command.strip(),
+            }
+        )
+    return actions
+
+
+def parse_omafile(text: str) -> dict:
+    result = empty_omafile()
+    if str(text or "").strip() == "":
+        return result
+
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        result["error"] = f"Invalid Omafile: {exc}"
+        return result
+
+    if not isinstance(data, dict):
+        result["error"] = "Omafile must be a table"
+        return result
+
+    errors: list[str] = []
+    name = _optional_string(data, "name", errors)
+    summary = _optional_string(data, "summary", errors)
+    url = _optional_string(data, "url", errors)
+    if url and not (url.startswith("http://") or url.startswith("https://")):
+        errors.append("url must start with http:// or https://")
+    actions = _parse_actions(data, errors)
+    if errors:
+        result["error"] = "; ".join(errors)
+        return result
+
+    result["name"] = name
+    result["summary"] = summary
+    result["url"] = url
+    result["actions"] = actions
+    return result
+
+
+def load_omafile(repo: Path) -> dict:
+    path = repo / OMAFILE_NAME
+    if not path.is_file():
+        return empty_omafile()
+
+    result = empty_omafile()
+    result["present"] = True
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        result["error"] = "Could not read Omafile"
+        return result
+
+    parsed = parse_omafile(text)
+    parsed["present"] = True
+    return parsed
 
 
 def github_url(remote: str) -> str:
@@ -166,9 +272,21 @@ def git_state(repo: Path, home: Path | None = None) -> dict:
 
     remote = _git_text(resolved, ["remote", "get-url", "origin"])
     home_path = home if home is not None else Path.home()
+    remote_url = github_url(remote)
+    omafile = load_omafile(resolved)
+    name = omafile["name"] or resolved.name
+    if omafile["error"]:
+        name = resolved.name
+        summary = ""
+        url = remote_url
+        actions: list[dict] = []
+    else:
+        summary = omafile["summary"]
+        url = omafile["url"] or remote_url
+        actions = omafile["actions"]
 
     return {
-        "name": resolved.name,
+        "name": name,
         "path": str(resolved),
         "displayPath": display_path(resolved, home_path),
         "branch": branch,
@@ -178,7 +296,11 @@ def git_state(repo: Path, home: Path | None = None) -> dict:
         "behind": behind,
         "hasUpstream": has_upstream,
         "ports": [],
-        "githubUrl": github_url(remote),
+        "githubUrl": remote_url,
+        "url": url,
+        "summary": summary,
+        "actions": actions,
+        "omafileError": omafile["error"],
     }
 
 

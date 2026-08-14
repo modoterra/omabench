@@ -45,6 +45,24 @@ The default work folder is `~/Work`. Point it somewhere else in `~/.config/omarc
 
 Refresh is every 8 seconds while the panel is closed, and every 4 seconds while it is open.
 
+## Omafile
+
+Drop an `Omafile` in the project root to name the card, add a summary, set the site URL, and attach commands. The file is TOML. Projects without one keep the folder name and built-in actions.
+
+```toml
+name = "Omabench"
+summary = "Live overview of ~/Work"
+url = "https://github.com/modoterra/omabench"
+
+[[actions]]
+label = "Dev"
+command = "bun run dev"
+```
+
+`name` replaces the folder name. `summary` sits under the path. `url` feeds the GitHub or site button. Each `actions` entry becomes a button; the command runs in that project directory in a new terminal.
+
+A broken `Omafile` is shown on that row. Omabench still lists the project.
+
 ## Remove
 
 ```sh

@@ -186,7 +186,7 @@ Panel {
         else if (t === "t" || t === "T") root.runSelectedAction("terminal")
         else if (t === "e" || t === "E") root.runSelectedAction("editor")
         else if (t === "f" || t === "F") root.runSelectedAction("folder")
-        else if (t === "g" || t === "G") root.runSelectedAction("github")
+        else if (t === "g" || t === "G") root.runSelectedAction("url")
         else if (t === "y" || t === "Y" || t === "c" || t === "C") root.runSelectedAction("copy")
       }
 
@@ -354,6 +354,16 @@ Panel {
       }
 
       Text {
+        visible: !!(projectRow.project && projectRow.project.summary)
+        width: parent.width
+        text: projectRow.project ? String(projectRow.project.summary || "") : ""
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        wrapMode: Text.WordWrap
+      }
+
+      Text {
         width: parent.width
         text: projectRow.project ? String(projectRow.project.branch || "") : ""
         color: root.foreground
@@ -376,6 +386,16 @@ Panel {
             font.pixelSize: Style.font.bodySmall
           }
         }
+      }
+
+      Text {
+        visible: !!(projectRow.project && projectRow.project.omafileError)
+        width: parent.width
+        text: projectRow.project ? String(projectRow.project.omafileError || "") : ""
+        color: root.urgent
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        wrapMode: Text.WordWrap
       }
     }
   }

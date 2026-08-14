@@ -110,13 +110,23 @@ Item {
     flash("Opened folder")
   }
 
-  function openGitHub(project) {
-    if (!project || !project.githubUrl) {
-      flash("No GitHub remote")
+  function openUrl(project) {
+    var url = Model.projectUrl(project)
+    if (!url) {
+      flash("No URL")
       return
     }
-    Qt.openUrlExternally(project.githubUrl)
-    flash("Opened GitHub")
+    Qt.openUrlExternally(url)
+    flash(Model.isGitHubUrl(url) ? "Opened GitHub" : "Opened site")
+  }
+
+  function runOmafileCommand(project, command, label) {
+    if (!project || !project.path || !command) return
+    Util.execDetached(
+      "setsid uwsm-app -- xdg-terminal-exec --dir=" + Util.shellQuote(project.path)
+        + " -- bash -lc " + Util.shellQuote(command)
+    )
+    flash("Running " + (label || command))
   }
 
   function copyPath(project) {
@@ -129,8 +139,17 @@ Item {
     if (actionId === "terminal") openTerminal(project)
     else if (actionId === "editor") openEditor(project)
     else if (actionId === "folder") openFolder(project)
-    else if (actionId === "github") openGitHub(project)
+    else if (actionId === "url" || actionId === "github") openUrl(project)
     else if (actionId === "copy") copyPath(project)
+    else if (String(actionId).indexOf("omafile:") === 0) {
+      var extras = project && Array.isArray(project.actions) ? project.actions : []
+      for (var i = 0; i < extras.length; i++) {
+        if (String(extras[i].id || "") === String(actionId)) {
+          runOmafileCommand(project, extras[i].command, extras[i].label)
+          return
+        }
+      }
+    }
   }
 
   Timer {

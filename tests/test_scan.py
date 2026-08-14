@@ -237,6 +237,97 @@ class ScanIntegrationTests(unittest.TestCase):
             self.assertEqual(payload["projects"][0]["name"], "echo")
 
 
+class OmafileTests(unittest.TestCase):
+    def test_missing_file_is_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            loaded = scan.load_omafile(Path(tmp))
+        self.assertFalse(loaded["present"])
+        self.assertEqual(loaded["error"], "")
+        self.assertEqual(loaded["name"], "")
+        self.assertEqual(loaded["actions"], [])
+
+    def test_parses_name_summary_url_and_actions(self):
+        parsed = scan.parse_omafile(
+            "\n".join(
+                [
+                    'name = "Omabench"',
+                    'summary = "Live overview of ~/Work"',
+                    'url = "https://github.com/modoterra/omabench"',
+                    "",
+                    "[[actions]]",
+                    'label = "Dev"',
+                    'command = "bun run dev"',
+                    "",
+                    "[[actions]]",
+                    'command = "just test"',
+                    "",
+                ]
+            )
+        )
+        self.assertEqual(parsed["error"], "")
+        self.assertEqual(parsed["name"], "Omabench")
+        self.assertEqual(parsed["summary"], "Live overview of ~/Work")
+        self.assertEqual(parsed["url"], "https://github.com/modoterra/omabench")
+        self.assertEqual(
+            parsed["actions"],
+            [
+                {"id": "omafile:0", "label": "Dev", "command": "bun run dev"},
+                {"id": "omafile:1", "label": "just test", "command": "just test"},
+            ],
+        )
+
+    def test_invalid_toml_sets_error(self):
+        parsed = scan.parse_omafile("name = [")
+        self.assertTrue(parsed["error"].startswith("Invalid Omafile:"))
+        self.assertEqual(parsed["name"], "")
+        self.assertEqual(parsed["actions"], [])
+
+    def test_rejects_bad_types_and_url(self):
+        parsed = scan.parse_omafile('name = 12\nurl = "github.com/acme/app"\n')
+        self.assertIn("name must be a string", parsed["error"])
+        self.assertIn("url must start with http:// or https://", parsed["error"])
+
+    def test_rejects_action_without_command(self):
+        parsed = scan.parse_omafile('[[actions]]\nlabel = "Dev"\n')
+        self.assertEqual(parsed["error"], "actions[0].command must be a string")
+
+    def test_git_state_applies_omafile_and_keeps_remote(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(Path(tmp) / "omabench")
+            git(repo, "remote", "add", "origin", "git@github.com:modoterra/omabench.git")
+            (repo / "Omafile").write_text(
+                'name = "Omabench"\nsummary = "Live overview of ~/Work"\n',
+                encoding="utf-8",
+            )
+            state = scan.git_state(repo)
+            self.assertEqual(state["name"], "Omabench")
+            self.assertEqual(state["summary"], "Live overview of ~/Work")
+            self.assertEqual(state["githubUrl"], "https://github.com/modoterra/omabench")
+            self.assertEqual(state["url"], "https://github.com/modoterra/omabench")
+            self.assertEqual(state["omafileError"], "")
+
+    def test_git_state_surfaces_broken_omafile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(Path(tmp) / "echo")
+            (repo / "Omafile").write_text("name = [\n", encoding="utf-8")
+            state = scan.git_state(repo)
+            self.assertEqual(state["name"], "echo")
+            self.assertTrue(state["omafileError"].startswith("Invalid Omafile:"))
+            self.assertEqual(state["actions"], [])
+
+    def test_omafile_url_overrides_github_remote(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(Path(tmp) / "echo")
+            git(repo, "remote", "add", "origin", "git@github.com:modoterra/echo.git")
+            (repo / "Omafile").write_text(
+                'url = "https://echo.dev"\n',
+                encoding="utf-8",
+            )
+            state = scan.git_state(repo)
+            self.assertEqual(state["githubUrl"], "https://github.com/modoterra/echo")
+            self.assertEqual(state["url"], "https://echo.dev")
+
+
 class ModelFormatTests(unittest.TestCase):
     def test_status_line_matches_overview(self):
         dirty = {
