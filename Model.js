@@ -210,17 +210,17 @@ function urlActionIcon(project) {
 
 function actionList(project) {
   var actions = [
-    { id: "terminal", label: "Terminal", tooltip: "Open Terminal", icon: "󰆍" },
-    { id: "editor", label: "Editor", tooltip: "Open Editor", icon: "󰷈" },
-    { id: "folder", label: "Folder", tooltip: "Open Folder", icon: "󰉋" },
+    { id: "terminal", label: "Terminal", tooltip: "Open Terminal (t · 1)", icon: "󰆍" },
+    { id: "editor", label: "Editor", tooltip: "Open Editor (e · 2)", icon: "󰷈" },
+    { id: "folder", label: "Folder", tooltip: "Open Folder (f · 3)", icon: "󰉋" },
     {
       id: "url",
       label: urlActionLabel(project),
-      tooltip: urlActionTooltip(project),
+      tooltip: urlActionTooltip(project) + " (g · 4)",
       icon: urlActionIcon(project),
       enabled: projectUrl(project) !== ""
     },
-    { id: "copy", label: "Copy", tooltip: "Copy Path", icon: "󰆏" }
+    { id: "copy", label: "Copy", tooltip: "Copy Path (c · 5)", icon: "󰆏" }
   ]
   var extras = project && Array.isArray(project.actions) ? project.actions : []
   for (var i = 0; i < extras.length; i++) {

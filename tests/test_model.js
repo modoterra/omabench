@@ -49,7 +49,7 @@ const actions = model.actionList({ githubUrl: "" })
 assert.strictEqual(actions[3].id, "url")
 assert.strictEqual(actions[3].enabled, false)
 assert.strictEqual(actions[3].label, "Site")
-assert.strictEqual(actions[3].tooltip, "Open Site")
+assert.strictEqual(actions[3].tooltip, "Open Site (g · 4)")
 
 const githubActions = model.actionList({ url: "https://github.com/modoterra/echo" })
 assert.strictEqual(githubActions[3].enabled, true)

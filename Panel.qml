@@ -97,6 +97,13 @@ Panel {
     workspace.runAction(actionId, selectedProject)
   }
 
+  function runActionAt(index) {
+    if (index < 0 || index >= actions.length) return
+    focusSection = "actions"
+    actionIndex = index
+    runSelectedAction(actions[index].id)
+  }
+
   function segmentColor(kind) {
     if (kind === "dirty") return accent
     if (kind === "port") return foreground
@@ -129,8 +136,9 @@ Panel {
   implicitHeight: button.implicitHeight
 
   onOpenedChanged: if (opened) {
-    cursorActive = false
+    cursorActive = true
     focusSection = "projects"
+    ensureSelection()
     if (panelFlick) panelFlick.contentY = 0
     workspace.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -182,19 +190,18 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
-        if (!root.cursorActive) { root.cursorActive = true; root.ensureSelection(); return }
         root.moveCursor(dx, dy)
       }
-      onActivateRequested: if (root.cursorActive) root.activateCursor()
+      onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         if (t === "r" || t === "R") workspace.refresh()
-        else if (t === "t" || t === "T") root.runSelectedAction("terminal")
-        else if (t === "e" || t === "E") root.runSelectedAction("editor")
-        else if (t === "f" || t === "F") root.runSelectedAction("folder")
-        else if (t === "g" || t === "G") root.runSelectedAction("url")
-        else if (t === "y" || t === "Y" || t === "c" || t === "C") root.runSelectedAction("copy")
+        else if (t === "t" || t === "T" || t === "1") root.runActionAt(0)
+        else if (t === "e" || t === "E" || t === "2") root.runActionAt(1)
+        else if (t === "f" || t === "F" || t === "3") root.runActionAt(2)
+        else if (t === "g" || t === "G" || t === "4") root.runActionAt(3)
+        else if (t === "y" || t === "Y" || t === "c" || t === "C" || t === "5") root.runActionAt(4)
       }
 
       Column {
@@ -352,7 +359,6 @@ Panel {
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onEntered: root.setProjectCursor(projectRow.rowIndex)
       onClicked: root.setProjectCursor(projectRow.rowIndex)
       onDoubleClicked: {
         root.setProjectCursor(projectRow.rowIndex)

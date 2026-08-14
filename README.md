@@ -22,11 +22,12 @@ Left click the mark to open the project list. Right click refreshes immediately.
 
 Inside the panel:
 
+- click a project to select it (hover does not change the selection)
 - `j` / `k` or arrows: move between projects
 - `h` / `l`: move onto the action pills
 - `enter` / `space`: open a terminal, or run the highlighted action
 - double click a row: open a terminal in that project
-- `t` terminal · `e` editor · `f` folder · `g` GitHub · `y` / `c` copy path
+- `t` / `1` terminal · `e` / `2` editor · `f` / `3` folder · `g` / `4` GitHub · `c` / `5` copy path
 - `r` refresh
 - `esc` close
 
