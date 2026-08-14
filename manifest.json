@@ -15,7 +15,7 @@
     "description": "See every project under ~/Work and open a terminal, editor, folder, or GitHub page from the bar.",
     "category": "Work",
     "allowMultiple": false,
-    "defaultSection": "left",
+    "defaultSection": "right",
     "defaults": {
       "workRoot": "~/Work",
       "refreshIntervalSec": 8,

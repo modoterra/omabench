@@ -31,6 +31,7 @@ Panel {
   }
   readonly property var selectedProject: projectIndex >= 0 ? projects[projectIndex] : null
   readonly property var actions: Model.actionList(selectedProject)
+  readonly property string mark: "󰚝"
 
   function ensureSelection() {
     if (!selectedProject) {
@@ -152,7 +153,7 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "󰉓"
+    text: root.mark
     active: workspace.dirtyCount > 0
     tooltipText: Model.barTooltip(workspace.scanPayload, workspace.refreshing)
     onPressed: function(buttonCode) {
@@ -215,7 +216,7 @@ Panel {
             fontFamily: root.fontFamily
             iconComponent: Component {
               Text {
-                text: "󰉓"
+                text: root.mark
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display

@@ -10,10 +10,10 @@ Click a project to open a terminal, the editor, the folder, or GitHub, or to cop
 omarchy plugin add https://github.com/modoterra/omabench.git --enable
 ```
 
-The widget lands on the left of the bar. Move it with:
+The widget lands on the right of the bar. Move it with:
 
 ```sh
-omarchy bar move modoterra.omabench --section left
+omarchy bar move modoterra.omabench --section right
 ```
 
 ## Usage
