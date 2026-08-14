@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "modoterra.omabench",
+  "name": "Omabench",
+  "version": "1.0.0",
+  "author": "Christoffer Hallas",
+  "license": "MIT",
+  "description": "A live overview of every git project under ~/Work: branch, dirty state, ahead/behind, and listening ports.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Omabench",
+    "description": "See every project under ~/Work and open a terminal, editor, folder, or GitHub page from the bar.",
+    "category": "Work",
+    "allowMultiple": false,
+    "defaultSection": "left",
+    "defaults": {
+      "workRoot": "~/Work",
+      "refreshIntervalSec": 8,
+      "maxDepth": 6
+    },
+    "schema": [
+      {
+        "key": "workRoot",
+        "type": "path",
+        "label": "Work folder",
+        "defaultValue": "~/Work",
+        "description": "Omabench walks this folder for git repositories."
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 2,
+        "max": 3600,
+        "step": 1,
+        "defaultValue": 8
+      },
+      {
+        "key": "maxDepth",
+        "type": "integer",
+        "label": "Search depth",
+        "min": 1,
+        "max": 12,
+        "step": 1,
+        "defaultValue": 6
+      }
+    ]
+  }
+}
