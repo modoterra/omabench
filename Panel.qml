@@ -197,140 +197,136 @@ Panel {
         else if (t === "y" || t === "Y" || t === "c" || t === "C") root.runSelectedAction("copy")
       }
 
-      Flickable {
-        id: panelFlick
-        anchors.fill: parent
-        contentWidth: width
-        contentHeight: column.implicitHeight
-        clip: true
-        boundsBehavior: Flickable.StopAtBounds
-        flickableDirection: Flickable.VerticalFlick
-        interactive: contentHeight > height
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+      Column {
+        id: column
+        width: parent.width
+        spacing: Style.space(12)
+
+        PanelHero {
+          id: hero
+          width: parent.width
+          title: "Omabench"
+          meta: Model.heroMeta(workspace.scanPayload)
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          iconComponent: Component {
+            Text {
+              text: root.mark
+              color: root.markColor
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.display
+            }
+          }
+          trailingControl: Component {
+            Button {
+              iconText: "󰑐"
+              tooltipText: "Refresh"
+              iconSpinning: workspace.refreshing
+              foreground: hero.foreground
+              fontFamily: hero.fontFamily
+              iconSize: Style.font.subtitle * 1.5
+              horizontalPadding: Style.space(5)
+              verticalPadding: Style.space(2)
+              onClicked: workspace.refresh()
+            }
+          }
+        }
+
+        Text {
+          visible: workspace.actionStatus !== "" || workspace.lastError !== ""
+          width: parent.width
+          text: workspace.actionStatus !== "" ? workspace.actionStatus : workspace.lastError
+          color: workspace.lastError !== "" && workspace.actionStatus === "" ? root.urgent : root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+        }
+
+        PanelSeparator {
+          foreground: root.foreground
+        }
+
+        PanelSectionHeader {
+          text: "PROJECTS"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+        }
+
+        Text {
+          visible: projects.length === 0 && workspace.lastError === ""
+          width: parent.width
+          text: workspace.rootExists
+            ? "No git projects in " + workspace.displayRoot + "."
+            : "Work folder not found: " + workspace.displayRoot
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          wrapMode: Text.WordWrap
+        }
+
+        Flickable {
+          id: panelFlick
+          visible: projects.length > 0
+          width: parent.width
+          height: visible ? Math.min(projectColumn.implicitHeight, Style.space(320)) : 0
+          contentWidth: width
+          contentHeight: projectColumn.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.VerticalFlick
+          interactive: contentHeight > height
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+          Column {
+            id: projectColumn
+            width: panelFlick.width
+            spacing: Style.space(4)
+
+            Repeater {
+              id: projectRepeater
+              model: projects
+              ProjectRow {
+                required property var modelData
+                required property int index
+                width: projectColumn.width
+                project: modelData
+                rowIndex: index
+              }
+            }
+          }
+        }
+
+        PanelSeparator {
+          visible: projects.length > 0
+          foreground: root.foreground
+        }
 
         Column {
-          id: column
-          width: panelFlick.width
-          spacing: Style.space(12)
+          visible: projects.length > 0
+          width: parent.width
+          spacing: Style.space(10)
 
-          PanelHero {
-            id: hero
-            width: parent.width
-            title: "Omabench"
-            meta: Model.heroMeta(workspace.scanPayload)
+          PanelSectionHeader {
+            text: selectedProject ? String(selectedProject.name || "PROJECT") : "PROJECT"
             foreground: root.foreground
             fontFamily: root.fontFamily
-            iconComponent: Component {
-              Text {
-                text: root.mark
-                color: root.markColor
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.display
-              }
-            }
-            trailingControl: Component {
-              Button {
-                iconText: "󰑐"
-                tooltipText: "Refresh"
-                iconSpinning: workspace.refreshing
-                foreground: hero.foreground
-                fontFamily: hero.fontFamily
-                iconSize: Style.font.subtitle * 1.5
-                horizontalPadding: Style.space(5)
-                verticalPadding: Style.space(2)
-                onClicked: workspace.refresh()
-              }
-            }
           }
 
-          Text {
-            visible: workspace.actionStatus !== "" || workspace.lastError !== ""
+          Row {
+            id: actionRow
             width: parent.width
-            text: workspace.actionStatus !== "" ? workspace.actionStatus : workspace.lastError
-            color: workspace.lastError !== "" && workspace.actionStatus === "" ? root.urgent : root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-          }
+            spacing: Style.space(6)
+            readonly property int count: Math.max(1, root.actions.length)
+            readonly property real cellWidth: (width - spacing * (count - 1)) / count
 
-          PanelSeparator {
-            foreground: root.foreground
-          }
-
-          Column {
-            width: parent.width
-            spacing: Style.space(10)
-
-            PanelSectionHeader {
-              text: "PROJECTS"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            Text {
-              visible: projects.length === 0 && workspace.lastError === ""
-              width: parent.width
-              text: workspace.rootExists
-                ? "No git projects in " + workspace.displayRoot + "."
-                : "Work folder not found: " + workspace.displayRoot
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              wrapMode: Text.WordWrap
-            }
-
-            Column {
-              id: projectColumn
-              visible: projects.length > 0
-              width: parent.width
-              spacing: Style.space(4)
-
-              Repeater {
-                id: projectRepeater
-                model: projects
-                ProjectRow {
-                  required property var modelData
-                  required property int index
-                  width: projectColumn.width
-                  project: modelData
-                  rowIndex: index
-                }
-              }
-            }
-          }
-
-          PanelSeparator {
-            visible: projects.length > 0
-            foreground: root.foreground
-          }
-
-          Column {
-            visible: projects.length > 0
-            width: parent.width
-            spacing: Style.space(10)
-
-            PanelSectionHeader {
-              text: selectedProject ? String(selectedProject.name || "PROJECT") : "PROJECT"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            Row {
-              id: actionRow
-              width: parent.width
-              spacing: Style.space(6)
-              readonly property int count: Math.max(1, root.actions.length)
-              readonly property real cellWidth: (width - spacing * (count - 1)) / count
-
-              Repeater {
-                model: root.actions
-                ActionPill {
-                  required property var modelData
-                  required property int index
-                  width: actionRow.cellWidth
-                  action: modelData
-                  actionIndex: index
-                }
+            Repeater {
+              model: root.actions
+              ActionPill {
+                required property var modelData
+                required property int index
+                width: actionRow.cellWidth
+                action: modelData
+                actionIndex: index
               }
             }
           }
