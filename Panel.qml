@@ -32,6 +32,11 @@ Panel {
   readonly property var selectedProject: projectIndex >= 0 ? projects[projectIndex] : null
   readonly property var actions: Model.actionList(selectedProject)
   readonly property string mark: "󰚝"
+  readonly property color markColor: {
+    if (projects.length === 0) return foreground
+    var hsl = Model.dirtyMarkHsl(Model.dirtyRatio(projects), urgent.r, urgent.g, urgent.b)
+    return Qt.hsla(hsl.h, hsl.s, hsl.l, 1)
+  }
 
   function ensureSelection() {
     if (!selectedProject) {
@@ -154,7 +159,9 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: root.mark
-    active: workspace.dirtyCount > 0
+    active: projects.length > 0
+    useActiveColor: true
+    activeColor: root.markColor
     tooltipText: Model.barTooltip(workspace.scanPayload, workspace.refreshing)
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) workspace.refresh()
@@ -217,7 +224,7 @@ Panel {
             iconComponent: Component {
               Text {
                 text: root.mark
-                color: root.foreground
+                color: root.markColor
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display
               }
@@ -279,6 +286,7 @@ Panel {
 
     hasCursor: selected
     foreground: root.foreground
+    borderSpec: Border.none()
 
     implicitHeight: rowBody.implicitHeight + Style.spacing.rowPaddingX
 

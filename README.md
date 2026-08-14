@@ -18,7 +18,7 @@ omarchy bar move modoterra.omabench --section right
 
 ## Usage
 
-Left click the folder icon to open the project list. Right click refreshes immediately. The icon lights up when any project is dirty.
+Left click the mark to open the project list. Right click refreshes immediately. The mark shifts from green to red as more projects are dirty.
 
 Inside the panel:
 

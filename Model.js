@@ -53,6 +53,46 @@ function dirtyCount(projects) {
   return count
 }
 
+function dirtyRatio(projects) {
+  var list = projects || []
+  if (list.length === 0) return 0
+  return dirtyCount(list) / list.length
+}
+
+function clamp01(value) {
+  var n = Number(value)
+  if (!isFinite(n) || n < 0) return 0
+  if (n > 1) return 1
+  return n
+}
+
+function rgbToHsl(r, g, b) {
+  var red = clamp01(r)
+  var green = clamp01(g)
+  var blue = clamp01(b)
+  var max = Math.max(red, green, blue)
+  var min = Math.min(red, green, blue)
+  var lightness = (max + min) / 2
+  if (max === min) return { h: 0, s: 0, l: lightness }
+  var delta = max - min
+  var saturation = lightness > 0.5 ? delta / (2 - max - min) : delta / (max + min)
+  var hue = 0
+  if (max === red) hue = ((green - blue) / delta + (green < blue ? 6 : 0)) / 6
+  else if (max === green) hue = ((blue - red) / delta + 2) / 6
+  else hue = ((red - green) / delta + 4) / 6
+  return { h: hue, s: saturation, l: lightness }
+}
+
+function dirtyMarkHsl(ratio, urgentR, urgentG, urgentB) {
+  var hsl = rgbToHsl(urgentR, urgentG, urgentB)
+  var greenHue = 120 / 360
+  return {
+    h: greenHue * (1 - clamp01(ratio)),
+    s: hsl.s,
+    l: hsl.l
+  }
+}
+
 function listeningCount(projects) {
   var count = 0
   var list = projects || []

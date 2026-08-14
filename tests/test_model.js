@@ -63,4 +63,23 @@ assert.strictEqual(withExtras[5].id, "omafile:0")
 assert.strictEqual(withExtras[5].label, "Dev")
 assert.strictEqual(withExtras[5].command, "bun run dev")
 
+assert.strictEqual(model.dirtyRatio([]), 0)
+assert.strictEqual(model.dirtyRatio(null), 0)
+assert.strictEqual(model.dirtyRatio([
+  { dirty: true },
+  { dirty: false },
+  { dirty: false },
+  { dirty: false }
+]), 0.25)
+assert.strictEqual(model.dirtyRatio([{ dirty: true }, { dirty: true }]), 1)
+
+const cleanHsl = model.dirtyMarkHsl(0, 165 / 255, 85 / 255, 85 / 255)
+const midHsl = model.dirtyMarkHsl(0.5, 165 / 255, 85 / 255, 85 / 255)
+const dirtyHsl = model.dirtyMarkHsl(1, 165 / 255, 85 / 255, 85 / 255)
+assert.ok(Math.abs(cleanHsl.h - 120 / 360) < 0.01)
+assert.ok(midHsl.h < cleanHsl.h && midHsl.h > dirtyHsl.h)
+assert.ok(dirtyHsl.h < 0.05)
+assert.ok(Math.abs(cleanHsl.s - dirtyHsl.s) < 0.001)
+assert.ok(Math.abs(cleanHsl.l - dirtyHsl.l) < 0.001)
+
 console.log("ok")
