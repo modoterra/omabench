@@ -492,6 +492,18 @@ def revoke_trust(store_path: Path, repo: Path, argv: list[str] | None = None) ->
     return {"ok": True, "error": ""}
 
 
+def ensure_trust_store(store_path: Path) -> dict:
+    resolved = str(store_path)
+    if _is_symlink(store_path):
+        return {"ok": False, "error": "Trust store must not be a symlink", "path": resolved}
+    if store_path.is_file():
+        return {"ok": True, "error": "", "path": resolved}
+    write_error = save_trust_store(store_path, empty_trust_store())
+    if write_error:
+        return {"ok": False, "error": write_error, "path": resolved}
+    return {"ok": True, "error": "", "path": resolved}
+
+
 def github_url(remote: str) -> str:
     value = str(remote or "").strip().rstrip("/")
     if value.endswith(".git"):
@@ -961,8 +973,8 @@ def build_parser() -> argparse.ArgumentParser:
         "action",
         nargs="?",
         default="scan",
-        choices=("scan", "grant", "revoke"),
-        help="scan projects, or grant/revoke an Omafile command",
+        choices=("scan", "grant", "revoke", "ensure"),
+        help="scan projects, grant/revoke an Omafile command, or create the trust store",
     )
     parser.add_argument("--root", default="~/Work", help="Work folder to scan (default: ~/Work)")
     parser.add_argument("--home", default=str(Path.home()), help="Home directory used for ~ display")
@@ -993,6 +1005,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     home = Path(args.home)
     store_path = Path(args.trust_store) if str(args.trust_store or "").strip() else default_trust_store(home)
+
+    if args.action == "ensure":
+        payload = ensure_trust_store(store_path)
+        json.dump(payload, sys.stdout, separators=(",", ":"))
+        sys.stdout.write("\n")
+        return 0 if payload.get("ok") else 1
 
     if args.action == "grant":
         repo = Path(args.repo)

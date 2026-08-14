@@ -498,6 +498,31 @@ class TrustStoreTests(unittest.TestCase):
             state = scan.git_state(repo, trust_store_path=store)
             self.assertFalse(state["actions"][0]["trusted"])
 
+    def test_ensure_creates_empty_store_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "state" / "trust.json"
+            created = scan.ensure_trust_store(store)
+            self.assertTrue(created["ok"])
+            self.assertTrue(store.is_file())
+            first = store.read_text(encoding="utf-8")
+            payload = json.loads(first)
+            self.assertEqual(payload["version"], 1)
+            self.assertEqual(payload["entries"], [])
+            store.write_text('{"version":1,"entries":[{"keep":true}]}\n', encoding="utf-8")
+            again = scan.ensure_trust_store(store)
+            self.assertTrue(again["ok"])
+            self.assertIn('"keep":true', store.read_text(encoding="utf-8"))
+
+    def test_ensure_refuses_symlink_trust_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.json"
+            target.write_text("{}\n", encoding="utf-8")
+            store = Path(tmp) / "trust.json"
+            store.symlink_to(target)
+            ensured = scan.ensure_trust_store(store)
+            self.assertFalse(ensured["ok"])
+            self.assertIn("symlink", ensured["error"])
+
     def test_refuses_symlink_trust_store(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "target.json"

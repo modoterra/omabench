@@ -248,16 +248,31 @@ Panel {
             }
           }
           trailingControl: Component {
-            Button {
-              iconText: "󰑐"
-              tooltipText: "Refresh"
-              iconSpinning: workspace.refreshing
-              foreground: hero.foreground
-              fontFamily: hero.fontFamily
-              iconSize: Style.font.subtitle * 1.5
-              horizontalPadding: Style.space(5)
-              verticalPadding: Style.space(2)
-              onClicked: workspace.refresh()
+            Row {
+              spacing: Style.space(4)
+
+              Button {
+                iconText: "󰌾"
+                tooltipText: "Open trust store"
+                foreground: hero.foreground
+                fontFamily: hero.fontFamily
+                iconSize: Style.font.subtitle * 1.5
+                horizontalPadding: Style.space(5)
+                verticalPadding: Style.space(2)
+                onClicked: workspace.openTrustStore()
+              }
+
+              Button {
+                iconText: "󰑐"
+                tooltipText: "Refresh"
+                iconSpinning: workspace.refreshing
+                foreground: hero.foreground
+                fontFamily: hero.fontFamily
+                iconSize: Style.font.subtitle * 1.5
+                horizontalPadding: Style.space(5)
+                verticalPadding: Style.space(2)
+                onClicked: workspace.refresh()
+              }
             }
           }
         }

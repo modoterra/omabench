@@ -71,7 +71,7 @@ An Omafile command is the same trust decision as running that project's Makefile
 
 The first time you click a project command, the panel shows the exact arguments and the project path. **Trust** records that command for that project and then runs it in a new terminal. Later clicks of the same command skip the prompt. If the command in the Omafile changes, Omabench asks again.
 
-Trusted commands are stored in `~/.local/state/omabench/trust.json` (or `$XDG_STATE_HOME/omabench/trust.json`). Delete that file to forget every remembered command.
+Trusted commands are stored in `~/.local/state/omabench/trust.json` (or `$XDG_STATE_HOME/omabench/trust.json`). The lock button left of Refresh opens that file in the editor. Delete the file to forget every remembered command.
 
 A broken or rejected `Omafile` is shown on that row. Omabench still lists the project.
 

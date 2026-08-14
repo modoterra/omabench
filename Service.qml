@@ -122,6 +122,16 @@ Item {
     flash("Opened folder")
   }
 
+  function openTrustStore() {
+    if (ensureProcess.running || helperPath === "") return
+    ensureProcess.command = [
+      "python3", helperPath, "ensure",
+      "--home", home,
+      "--trust-store", trustStorePath
+    ]
+    ensureProcess.running = true
+  }
+
   function openUrl(project) {
     var url = Model.projectUrl(project)
     if (!url) {
@@ -247,6 +257,27 @@ Item {
       var stderr = String(scanStderr.text || root._scanError || "")
       if (exitCode === 0) root.applyScan(stdout)
       else root.lastError = root.elideStatus(stderr || stdout || "Could not scan work folder")
+    }
+  }
+
+  Process {
+    id: ensureProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: ensureStdout; waitForEnd: true }
+    stderr: StdioCollector { id: ensureStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var stdout = String(ensureStdout.text || "")
+      var stderr = String(ensureStderr.text || "")
+      var payload = {}
+      try { payload = JSON.parse(stdout) } catch (e) { payload = {} }
+      if (exitCode !== 0 || payload.ok !== true) {
+        root.flash(root.elideStatus(payload.error || stderr || "Could not open trust store"))
+        return
+      }
+      var path = String(payload.path || root.trustStorePath)
+      Quickshell.execDetached(["omarchy-launch-editor", path])
+      root.flash("Opened trust store")
     }
   }
 
