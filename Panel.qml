@@ -326,8 +326,11 @@ Panel {
         }
 
         Row {
-          visible: projectRow.selected
+          // Stay in the layout when the row is idle. Hiding this cluster
+          // made the name row shrink and the list jump on each move.
           spacing: Style.space(2)
+          opacity: projectRow.selected ? 1 : 0
+          enabled: projectRow.selected
 
           Repeater {
             model: projectRow.rowActions
@@ -335,10 +338,10 @@ Panel {
               required property var modelData
               required property int index
               iconText: modelData.icon
-              tooltipText: modelData.label
+              tooltipText: projectRow.selected ? modelData.label : ""
               foreground: root.foreground
               fontFamily: root.fontFamily
-              enabled: modelData.enabled !== false
+              enabled: projectRow.selected && modelData.enabled !== false
               hasCursor: root.focusSection === "actions" && root.actionIndex === index && projectRow.selected
               onHovered: function(on) {
                 if (!on) return
