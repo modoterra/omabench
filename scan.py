@@ -201,7 +201,7 @@ def discover_repos(root: Path, max_depth: int = 6) -> list[Path]:
             return
         for entry in entries:
             try:
-                if not entry.is_dir(follow_symlinks=False):
+                if entry.is_symlink() or not entry.is_dir():
                     continue
             except OSError:
                 continue

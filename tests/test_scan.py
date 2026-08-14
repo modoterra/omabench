@@ -118,6 +118,15 @@ class DiscoverTests(unittest.TestCase):
             self.assertEqual(scan.discover_repos(root, max_depth=2), [])
             self.assertEqual(len(scan.discover_repos(root, max_depth=3)), 1)
 
+    def test_skips_symlinked_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "work"
+            other = Path(tmp) / "other"
+            work.mkdir()
+            target = init_repo(other / "secret")
+            (work / "alias").symlink_to(target)
+            self.assertEqual(scan.discover_repos(work), [])
+
 
 class GitStateTests(unittest.TestCase):
     def test_clean_branch_and_github_remote(self):
