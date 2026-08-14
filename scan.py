@@ -4,16 +4,81 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import shlex
+import stat
 import subprocess
 import sys
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 OMAFILE_NAME = "Omafile"
+OMAFILE_MAX_BYTES = 16 * 1024
+OMAFILE_MAX_ACTIONS = 8
+OMAFILE_MAX_NAME = 64
+OMAFILE_MAX_SUMMARY = 140
+OMAFILE_MAX_URL = 500
+OMAFILE_MAX_LABEL = 32
+OMAFILE_MAX_COMMAND = 200
+OMAFILE_MAX_ARGV = 12
+
+RESERVED_ACTION_LABELS = frozenset(
+    {
+        "terminal",
+        "editor",
+        "folder",
+        "github",
+        "site",
+        "copy",
+    }
+)
+
+# First token must be one of these. A set value is the allowed second token.
+ALLOWED_PROGRAMS: dict[str, frozenset[str] | None] = {
+    "bun": frozenset({"run", "test", "start"}),
+    "cargo": frozenset({"test", "run", "build", "check", "clippy", "fmt", "doc"}),
+    "docker": frozenset({"compose"}),
+    "gmake": None,
+    "go": frozenset({"test", "run", "build", "vet", "fmt"}),
+    "just": None,
+    "make": None,
+    "mise": frozenset({"run"}),
+    "npm": frozenset({"run", "test", "start", "run-script"}),
+    "pnpm": frozenset({"run", "test", "start"}),
+    "podman": frozenset({"compose"}),
+    "poetry": frozenset({"run", "test"}),
+    "pytest": None,
+    "python": frozenset({"-m"}),
+    "python3": frozenset({"-m"}),
+    "task": None,
+    "uv": frozenset({"run", "test", "sync"}),
+    "yarn": frozenset({"run", "test", "start"}),
+}
+
+SAFE_ARG_RE = re.compile(
+    r"^(?:"
+    r"[A-Za-z0-9][A-Za-z0-9._:@+/-]*"
+    r"|--?[A-Za-z0-9][A-Za-z0-9_-]*(?:=[A-Za-z0-9._:@+/-]+)?"
+    r"|\./[A-Za-z0-9._/@+-]*(?:\.\.\.)?"
+    r")$"
+)
+
+GIT_SAFE_CONFIG = (
+    "-c",
+    "core.fsmonitor=",
+    "-c",
+    "core.useBuiltinFSMonitor=false",
+    "-c",
+    "core.hooksPath=",
+)
+
+TRUST_STORE_VERSION = 1
+CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
 SKIP_DIR_NAMES = frozenset(
     {
@@ -66,57 +131,159 @@ def empty_omafile() -> dict:
         "url": "",
         "actions": [],
         "error": "",
+        "warning": "",
     }
 
 
-def _optional_string(data: dict, key: str, errors: list[str]) -> str:
+def empty_trust_store() -> dict:
+    return {"version": TRUST_STORE_VERSION, "entries": []}
+
+
+def sanitize_text(value: str, max_len: int) -> str:
+    text = CONTROL_CHARS_RE.sub("", str(value or ""))
+    text = text.replace("<", "").replace(">", "")
+    text = " ".join(text.split())
+    if max_len > 0 and len(text) > max_len:
+        text = text[:max_len].rstrip()
+    return text
+
+
+def _optional_string(data: dict, key: str, errors: list[str], max_len: int) -> str:
     if key not in data:
         return ""
     value = data[key]
     if not isinstance(value, str):
         errors.append(f"{key} must be a string")
         return ""
-    return value.strip()
+    return sanitize_text(value, max_len)
 
 
-def _parse_actions(data: dict, errors: list[str]) -> list[dict]:
+def _arg_is_safe(token: str) -> bool:
+    if not token or not SAFE_ARG_RE.fullmatch(token):
+        return False
+    return ".." not in token.split("/")
+
+
+def validate_argv(argv: list[str]) -> str:
+    if not argv:
+        return "command is empty"
+    if len(argv) > OMAFILE_MAX_ARGV:
+        return "command has too many arguments"
+    program = argv[0]
+    if program not in ALLOWED_PROGRAMS:
+        return "not an allowlisted command"
+    if any(not _arg_is_safe(token) for token in argv):
+        return "command contains an unsafe argument"
+    allowed_subcommands = ALLOWED_PROGRAMS[program]
+    if allowed_subcommands is not None:
+        if len(argv) < 2 or argv[1] not in allowed_subcommands:
+            return "not an allowlisted command"
+    display = " ".join(argv)
+    if len(display) > OMAFILE_MAX_COMMAND:
+        return "command is too long"
+    return ""
+
+
+def parse_allowlisted_command(command: str) -> tuple[list[str] | None, str]:
+    text = str(command or "").strip()
+    if text == "":
+        return None, "command must be a string"
+    if len(text) > OMAFILE_MAX_COMMAND:
+        return None, "command is too long"
+    try:
+        argv = shlex.split(text, posix=True)
+    except ValueError:
+        return None, "command could not be parsed"
+    error = validate_argv(argv)
+    if error:
+        return None, error
+    return argv, ""
+
+
+def _parse_action_argv(item: dict, prefix: str) -> tuple[list[str] | None, str]:
+    if "run" in item:
+        raw_run = item["run"]
+        if not isinstance(raw_run, list) or not raw_run:
+            return None, f"{prefix}.run must be an array of strings"
+        argv: list[str] = []
+        for part in raw_run:
+            if not isinstance(part, str) or part.strip() == "":
+                return None, f"{prefix}.run must be an array of strings"
+            argv.append(part.strip())
+        error = validate_argv(argv)
+        if error:
+            return None, f"{prefix}.run {error}"
+        return argv, ""
+
+    command = item.get("command")
+    if not isinstance(command, str) or command.strip() == "":
+        return None, f"{prefix}.command must be a string"
+    argv, error = parse_allowlisted_command(command)
+    if error:
+        return None, f"{prefix}.command {error}"
+    return argv, ""
+
+
+def _parse_actions(data: dict, errors: list[str], warnings: list[str]) -> list[dict]:
     if "actions" not in data:
         return []
     raw_actions = data["actions"]
     if not isinstance(raw_actions, list):
         errors.append("actions must be an array")
         return []
+
     actions: list[dict] = []
+    skipped = 0
     for index, item in enumerate(raw_actions):
         prefix = f"actions[{index}]"
         if not isinstance(item, dict):
-            errors.append(f"{prefix} must be a table")
+            warnings.append(f"{prefix} must be a table")
             continue
-        command = item.get("command")
-        if not isinstance(command, str) or command.strip() == "":
-            errors.append(f"{prefix}.command must be a string")
+        argv, error = _parse_action_argv(item, prefix)
+        if error:
+            warnings.append(error)
             continue
-        label = item.get("label", command)
-        if not isinstance(label, str) or label.strip() == "":
-            errors.append(f"{prefix}.label must be a string")
+        if argv is None:
+            continue
+        command = " ".join(argv)
+        label_source = item.get("label", command)
+        if not isinstance(label_source, str):
+            warnings.append(f"{prefix}.label must be a string")
+            continue
+        label = sanitize_text(label_source, OMAFILE_MAX_LABEL)
+        if label == "":
+            warnings.append(f"{prefix}.label must be a string")
+            continue
+        if label.casefold() in RESERVED_ACTION_LABELS:
+            warnings.append(f"{prefix}.label is reserved")
+            continue
+        if len(actions) >= OMAFILE_MAX_ACTIONS:
+            skipped += 1
             continue
         actions.append(
             {
                 "id": f"omafile:{index}",
-                "label": label.strip(),
-                "command": command.strip(),
+                "label": label,
+                "command": command,
+                "argv": argv,
             }
         )
+    if skipped:
+        warnings.append(f"too many actions; keeping the first {OMAFILE_MAX_ACTIONS}")
     return actions
 
 
 def parse_omafile(text: str) -> dict:
     result = empty_omafile()
-    if str(text or "").strip() == "":
+    raw = str(text or "")
+    if raw.strip() == "":
+        return result
+    if len(raw.encode("utf-8")) > OMAFILE_MAX_BYTES:
+        result["error"] = f"Omafile is larger than {OMAFILE_MAX_BYTES} bytes"
         return result
 
     try:
-        data = tomllib.loads(text)
+        data = tomllib.loads(raw)
     except tomllib.TOMLDecodeError as exc:
         result["error"] = f"Invalid Omafile: {exc}"
         return result
@@ -126,12 +293,13 @@ def parse_omafile(text: str) -> dict:
         return result
 
     errors: list[str] = []
-    name = _optional_string(data, "name", errors)
-    summary = _optional_string(data, "summary", errors)
-    url = _optional_string(data, "url", errors)
+    warnings: list[str] = []
+    name = _optional_string(data, "name", errors, OMAFILE_MAX_NAME)
+    summary = _optional_string(data, "summary", errors, OMAFILE_MAX_SUMMARY)
+    url = _optional_string(data, "url", errors, OMAFILE_MAX_URL)
     if url and not (url.startswith("http://") or url.startswith("https://")):
         errors.append("url must start with http:// or https://")
-    actions = _parse_actions(data, errors)
+    actions = _parse_actions(data, errors, warnings)
     if errors:
         result["error"] = "; ".join(errors)
         return result
@@ -140,6 +308,7 @@ def parse_omafile(text: str) -> dict:
     result["summary"] = summary
     result["url"] = url
     result["actions"] = actions
+    result["warning"] = "; ".join(warnings)
     return result
 
 
@@ -151,14 +320,176 @@ def load_omafile(repo: Path) -> dict:
     result = empty_omafile()
     result["present"] = True
     try:
-        text = path.read_text(encoding="utf-8")
+        with path.open("r", encoding="utf-8") as handle:
+            text = handle.read(OMAFILE_MAX_BYTES + 1)
     except OSError:
         result["error"] = "Could not read Omafile"
+        return result
+
+    if len(text.encode("utf-8")) > OMAFILE_MAX_BYTES:
+        result["error"] = f"Omafile is larger than {OMAFILE_MAX_BYTES} bytes"
         return result
 
     parsed = parse_omafile(text)
     parsed["present"] = True
     return parsed
+
+
+def default_trust_store(home: Path) -> Path:
+    xdg = str(os.environ.get("XDG_STATE_HOME") or "").strip()
+    if xdg:
+        return Path(xdg) / "omabench" / "trust.json"
+    return home / ".local" / "state" / "omabench" / "trust.json"
+
+
+def action_digest(path: str, argv: list[str]) -> str:
+    payload = json.dumps(
+        {"path": path, "argv": argv},
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _is_symlink(path: Path) -> bool:
+    try:
+        return path.is_symlink()
+    except OSError:
+        return False
+
+
+def load_trust_store(store_path: Path | None) -> dict:
+    if store_path is None:
+        return empty_trust_store()
+    if _is_symlink(store_path):
+        return empty_trust_store()
+    if not store_path.is_file():
+        return empty_trust_store()
+    try:
+        raw = store_path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return empty_trust_store()
+    if not isinstance(data, dict) or data.get("version") != TRUST_STORE_VERSION:
+        return empty_trust_store()
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return empty_trust_store()
+
+    cleaned: list[dict] = []
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        path = item.get("path")
+        argv = item.get("argv")
+        digest = item.get("digest")
+        if not isinstance(path, str) or path == "":
+            continue
+        if not isinstance(argv, list) or not all(isinstance(part, str) for part in argv):
+            continue
+        if not isinstance(digest, str) or digest != action_digest(path, argv):
+            continue
+        cleaned.append(
+            {
+                "digest": digest,
+                "path": path,
+                "argv": list(argv),
+                "label": sanitize_text(str(item.get("label") or ""), OMAFILE_MAX_LABEL),
+                "trustedAt": str(item.get("trustedAt") or ""),
+            }
+        )
+    return {"version": TRUST_STORE_VERSION, "entries": cleaned}
+
+
+def save_trust_store(store_path: Path, store: dict) -> str:
+    if _is_symlink(store_path):
+        return "Trust store must not be a symlink"
+    parent = store_path.parent
+    try:
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        return f"Could not create trust store: {exc}"
+    if _is_symlink(parent):
+        return "Trust store directory must not be a symlink"
+
+    payload = json.dumps(store, indent=2, ensure_ascii=False) + "\n"
+    tmp_path = store_path.with_name(store_path.name + ".tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(tmp_path, flags, 0o600)
+    except OSError as exc:
+        return f"Could not write trust store: {exc}"
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+        os.replace(tmp_path, store_path)
+        os.chmod(store_path, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError as exc:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return f"Could not write trust store: {exc}"
+    return ""
+
+
+def is_action_trusted(store: dict, path: str, argv: list[str]) -> bool:
+    digest = action_digest(path, argv)
+    for entry in store.get("entries") or []:
+        if entry.get("digest") == digest:
+            return True
+    return False
+
+
+def grant_trust(store_path: Path, repo: Path, argv: list[str], label: str = "") -> dict:
+    if _is_symlink(store_path):
+        return {"ok": False, "error": "Trust store must not be a symlink", "digest": ""}
+    error = validate_argv(argv)
+    if error:
+        return {"ok": False, "error": error, "digest": ""}
+    try:
+        resolved = str(repo.resolve())
+    except OSError:
+        resolved = str(repo)
+    store = load_trust_store(store_path)
+    digest = action_digest(resolved, argv)
+    entries = [entry for entry in store["entries"] if entry.get("digest") != digest]
+    entries.append(
+        {
+            "digest": digest,
+            "path": resolved,
+            "argv": list(argv),
+            "label": sanitize_text(label or " ".join(argv), OMAFILE_MAX_LABEL),
+            "trustedAt": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    store["entries"] = entries
+    write_error = save_trust_store(store_path, store)
+    if write_error:
+        return {"ok": False, "error": write_error, "digest": ""}
+    return {"ok": True, "error": "", "digest": digest}
+
+
+def revoke_trust(store_path: Path, repo: Path, argv: list[str] | None = None) -> dict:
+    if _is_symlink(store_path):
+        return {"ok": False, "error": "Trust store must not be a symlink"}
+    try:
+        resolved = str(repo.resolve())
+    except OSError:
+        resolved = str(repo)
+    store = load_trust_store(store_path)
+    if argv is None:
+        entries = [entry for entry in store["entries"] if entry.get("path") != resolved]
+    else:
+        digest = action_digest(resolved, argv)
+        entries = [entry for entry in store["entries"] if entry.get("digest") != digest]
+    store["entries"] = entries
+    write_error = save_trust_store(store_path, store)
+    if write_error:
+        return {"ok": False, "error": write_error}
+    return {"ok": True, "error": ""}
 
 
 def github_url(remote: str) -> str:
@@ -223,7 +554,7 @@ def _git_env() -> dict[str, str]:
 
 def run_git(repo: Path, args: list[str], timeout: float = 5.0) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["git", "-C", str(repo), *args],
+        ["git", "-C", str(repo), *GIT_SAFE_CONFIG, *args],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -242,7 +573,101 @@ def _git_text(repo: Path, args: list[str]) -> str:
     return (result.stdout or "").strip()
 
 
-def git_state(repo: Path, home: Path | None = None) -> dict:
+LS_FILES_DEBUG_MTIME = re.compile(r"mtime:\s*(\d+):")
+LS_FILES_DEBUG_SIZE = re.compile(r"size:\s*(\d+)")
+
+
+def parse_ls_files_debug(text: str) -> list[tuple[str, int, int]]:
+    entries: list[tuple[str, int, int]] = []
+    name = ""
+    meta: list[str] = []
+
+    def flush() -> None:
+        if name == "":
+            return
+        blob = "\n".join(meta)
+        mtime = LS_FILES_DEBUG_MTIME.search(blob)
+        size = LS_FILES_DEBUG_SIZE.search(blob)
+        if mtime and size:
+            entries.append((name, int(mtime.group(1)), int(size.group(1))))
+
+    for raw_line in str(text or "").splitlines():
+        if raw_line.startswith("  "):
+            meta.append(raw_line)
+            continue
+        flush()
+        name = raw_line
+        meta = []
+    flush()
+    return entries
+
+
+GITLINK_MODE = 0o160000
+
+
+def parse_ls_files_stage(text: str) -> dict[str, int]:
+    modes: dict[str, int] = {}
+    for line in str(text or "").splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        try:
+            modes[parts[3]] = int(parts[0], 8)
+        except ValueError:
+            continue
+    return modes
+
+
+def worktree_stat_changed(repo: Path, debug_text: str, stage_text: str = "") -> set[str]:
+    modes = parse_ls_files_stage(stage_text)
+    changed: set[str] = set()
+    for relpath, mtime_sec, size in parse_ls_files_debug(debug_text):
+        if modes.get(relpath, 0) == GITLINK_MODE:
+            continue
+        path = repo / relpath
+        try:
+            info = path.lstat()
+        except OSError:
+            changed.add(relpath)
+            continue
+        if stat.S_ISDIR(info.st_mode):
+            continue
+        if int(info.st_mtime) != mtime_sec or int(info.st_size) != size:
+            changed.add(relpath)
+    return changed
+
+
+def git_changed_count(repo: Path) -> int:
+    # Do not use `git status`. Repo-local core.fsmonitor and filter.*.clean
+    # can execute during a porcelain status of a copied checkout.
+    staged = _git_text(repo, ["diff-index", "--cached", "--name-only", "HEAD"])
+    untracked = _git_text(repo, ["ls-files", "--others", "--exclude-standard"])
+    debug = _git_text(repo, ["ls-files", "--debug"])
+    stage = _git_text(repo, ["ls-files", "-s"])
+    names = {line for line in staged.splitlines() if line.strip()}
+    names.update(line for line in untracked.splitlines() if line.strip())
+    names.update(worktree_stat_changed(repo, debug, stage))
+    return len(names)
+
+
+def annotate_actions(actions: list[dict], repo_path: str, store: dict) -> list[dict]:
+    annotated: list[dict] = []
+    for action in actions:
+        argv = list(action.get("argv") or [])
+        item = dict(action)
+        item["argv"] = argv
+        item["digest"] = action_digest(repo_path, argv)
+        item["trusted"] = is_action_trusted(store, repo_path, argv)
+        annotated.append(item)
+    return annotated
+
+
+def git_state(
+    repo: Path,
+    home: Path | None = None,
+    trust_store_path: Path | None = None,
+    trust_store: dict | None = None,
+) -> dict:
     resolved = repo
     try:
         resolved = repo.resolve()
@@ -254,9 +679,7 @@ def git_state(repo: Path, home: Path | None = None) -> dict:
         short = _git_text(resolved, ["rev-parse", "--short", "HEAD"])
         branch = f"detached {short}" if short else "HEAD"
 
-    porcelain = _git_text(resolved, ["status", "--porcelain=v1"])
-    changed_lines = [line for line in porcelain.splitlines() if line.strip()]
-    changed = len(changed_lines)
+    changed = git_changed_count(resolved)
 
     ahead = 0
     behind = 0
@@ -283,7 +706,8 @@ def git_state(repo: Path, home: Path | None = None) -> dict:
     else:
         summary = omafile["summary"]
         url = omafile["url"] or remote_url
-        actions = omafile["actions"]
+        store = trust_store if trust_store is not None else load_trust_store(trust_store_path)
+        actions = annotate_actions(omafile["actions"], str(resolved), store)
 
     return {
         "name": name,
@@ -300,7 +724,7 @@ def git_state(repo: Path, home: Path | None = None) -> dict:
         "url": url,
         "summary": summary,
         "actions": actions,
-        "omafileError": omafile["error"],
+        "omafileError": omafile["error"] or omafile["warning"],
     }
 
 
@@ -478,6 +902,7 @@ def scan_work(
     home: Path | None = None,
     proc_root: Path | None = None,
     max_depth: int = 6,
+    trust_store_path: Path | None = None,
 ) -> dict:
     home_path = home if home is not None else Path.home()
     try:
@@ -510,9 +935,20 @@ def scan_work(
     if not repos:
         return payload
 
+    store_path = trust_store_path if trust_store_path is not None else default_trust_store(home_path)
+    store = load_trust_store(store_path)
     workers = min(8, len(repos))
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        projects = list(pool.map(lambda repo: git_state(repo, home=home_path), repos))
+        projects = list(
+            pool.map(
+                lambda repo: git_state(
+                    repo,
+                    home=home_path,
+                    trust_store=store,
+                ),
+                repos,
+            )
+        )
 
     assign_ports(projects, proc_root if proc_root is not None else Path("/proc"))
     payload["projects"] = sort_projects(projects)
@@ -521,19 +957,78 @@ def scan_work(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Scan a work folder for git project state.")
+    parser.add_argument(
+        "action",
+        nargs="?",
+        default="scan",
+        choices=("scan", "grant", "revoke"),
+        help="scan projects, or grant/revoke an Omafile command",
+    )
     parser.add_argument("--root", default="~/Work", help="Work folder to scan (default: ~/Work)")
     parser.add_argument("--home", default=str(Path.home()), help="Home directory used for ~ display")
     parser.add_argument("--max-depth", type=int, default=6, help="Maximum search depth from the work root")
     parser.add_argument("--proc", default="/proc", help="proc filesystem used to map listening ports")
+    parser.add_argument("--trust-store", default="", help="Trust store JSON path")
+    parser.add_argument("--repo", default="", help="Repository path for grant/revoke")
+    parser.add_argument("--argv-json", default="", help="JSON array of the command to grant or revoke")
+    parser.add_argument("--label", default="", help="Label stored with a granted command")
     return parser
+
+
+def _parse_argv_json(raw: str) -> tuple[list[str] | None, str]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return None, f"Invalid argv JSON: {exc}"
+    if not isinstance(value, list) or not value or not all(isinstance(part, str) for part in value):
+        return None, "argv JSON must be an array of strings"
+    argv = [part.strip() for part in value]
+    error = validate_argv(argv)
+    if error:
+        return None, error
+    return argv, ""
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     home = Path(args.home)
+    store_path = Path(args.trust_store) if str(args.trust_store or "").strip() else default_trust_store(home)
+
+    if args.action == "grant":
+        repo = Path(args.repo)
+        parsed_argv, error = _parse_argv_json(args.argv_json)
+        if parsed_argv is None:
+            json.dump({"ok": False, "error": error, "digest": ""}, sys.stdout, separators=(",", ":"))
+            sys.stdout.write("\n")
+            return 1
+        payload = grant_trust(store_path, repo, parsed_argv, args.label)
+        json.dump(payload, sys.stdout, separators=(",", ":"))
+        sys.stdout.write("\n")
+        return 0 if payload.get("ok") else 1
+
+    if args.action == "revoke":
+        repo = Path(args.repo)
+        parsed_argv = None
+        if str(args.argv_json or "").strip():
+            parsed_argv, error = _parse_argv_json(args.argv_json)
+            if parsed_argv is None:
+                json.dump({"ok": False, "error": error}, sys.stdout, separators=(",", ":"))
+                sys.stdout.write("\n")
+                return 1
+        payload = revoke_trust(store_path, repo, parsed_argv)
+        json.dump(payload, sys.stdout, separators=(",", ":"))
+        sys.stdout.write("\n")
+        return 0 if payload.get("ok") else 1
+
     root = resolve_root(args.root, home)
     max_depth = args.max_depth if args.max_depth > 0 else 6
-    payload = scan_work(root, home=home, proc_root=Path(args.proc), max_depth=max_depth)
+    payload = scan_work(
+        root,
+        home=home,
+        proc_root=Path(args.proc),
+        max_depth=max_depth,
+        trust_store_path=store_path,
+    )
     json.dump(payload, sys.stdout, separators=(",", ":"))
     sys.stdout.write("\n")
     return 0 if payload.get("ok") else 1

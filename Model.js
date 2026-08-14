@@ -9,6 +9,26 @@ function emptyScan() {
   }
 }
 
+function sanitizeText(value, maxLen) {
+  var text = String(value || "")
+  text = text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "")
+  text = text.replace(/[<>]/g, "")
+  text = text.replace(/\s+/g, " ").trim()
+  if (maxLen > 0 && text.length > maxLen) text = text.substring(0, maxLen).replace(/\s+$/, "")
+  return text
+}
+
+function normalizeArgv(value) {
+  if (!Array.isArray(value)) return []
+  var argv = []
+  for (var i = 0; i < value.length; i++) {
+    var part = String(value[i] || "").trim()
+    if (part === "") return []
+    argv.push(part)
+  }
+  return argv
+}
+
 function parseScan(raw) {
   var text = String(raw || "").trim()
   if (text === "") return emptyScan()
@@ -30,12 +50,36 @@ function parseScan(raw) {
   }
 }
 
+function normalizeAction(action, index) {
+  if (!action || typeof action !== "object") return null
+  var argv = normalizeArgv(action.argv)
+  if (argv.length === 0) return null
+  var command = sanitizeText(action.command || argv.join(" "), 200)
+  var label = sanitizeText(action.label || command, 32)
+  if (label === "" || command === "") return null
+  return {
+    id: String(action.id || ("omafile:" + index)),
+    label: label,
+    command: command,
+    argv: argv,
+    digest: String(action.digest || ""),
+    trusted: action.trusted === true
+  }
+}
+
 function normalizeProject(project) {
   if (!project || typeof project !== "object") return project
-  project.summary = String(project.summary || "")
-  project.url = String(project.url || project.githubUrl || "")
-  project.omafileError = String(project.omafileError || "")
-  project.actions = Array.isArray(project.actions) ? project.actions : []
+  project.name = sanitizeText(project.name, 64)
+  project.summary = sanitizeText(project.summary, 140)
+  project.url = sanitizeText(project.url || project.githubUrl || "", 500)
+  project.omafileError = sanitizeText(project.omafileError || "", 280)
+  var rawActions = Array.isArray(project.actions) ? project.actions : []
+  var actions = []
+  for (var i = 0; i < rawActions.length; i++) {
+    var action = normalizeAction(rawActions[i], i)
+    if (action) actions.push(action)
+  }
+  project.actions = actions
   return project
 }
 
@@ -208,33 +252,59 @@ function urlActionIcon(project) {
   return isGitHubUrl(projectUrl(project)) ? "󰊤" : "󰖟"
 }
 
-function actionList(project) {
-  var actions = [
-    { id: "terminal", label: "Terminal", tooltip: "Open Terminal (t · 1)", icon: "󰆍" },
-    { id: "editor", label: "Editor", tooltip: "Open Editor (e · 2)", icon: "󰷈" },
-    { id: "folder", label: "Folder", tooltip: "Open Folder (f · 3)", icon: "󰉋" },
+function builtinActionList(project) {
+  return [
+    { id: "terminal", label: "Terminal", tooltip: "Open Terminal (t · 1)", icon: "󰆍", kind: "builtin" },
+    { id: "editor", label: "Editor", tooltip: "Open Editor (e · 2)", icon: "󰷈", kind: "builtin" },
+    { id: "folder", label: "Folder", tooltip: "Open Folder (f · 3)", icon: "󰉋", kind: "builtin" },
     {
       id: "url",
       label: urlActionLabel(project),
       tooltip: urlActionTooltip(project) + " (g · 4)",
       icon: urlActionIcon(project),
-      enabled: projectUrl(project) !== ""
+      enabled: projectUrl(project) !== "",
+      kind: "builtin"
     },
-    { id: "copy", label: "Copy", tooltip: "Copy Path (c · 5)", icon: "󰆏" }
+    { id: "copy", label: "Copy", tooltip: "Copy Path (c · 5)", icon: "󰆏", kind: "builtin" }
   ]
+}
+
+function projectActionList(project) {
   var extras = project && Array.isArray(project.actions) ? project.actions : []
+  var actions = []
   for (var i = 0; i < extras.length; i++) {
     var extra = extras[i] || {}
-    var command = String(extra.command || "")
-    if (command === "") continue
-    var extraLabel = String(extra.label || command)
+    var argv = normalizeArgv(extra.argv)
+    if (argv.length === 0) continue
+    var command = sanitizeText(extra.command || argv.join(" "), 200)
+    var extraLabel = sanitizeText(extra.label || command, 32)
+    if (extraLabel === "") continue
+    var trusted = extra.trusted === true
     actions.push({
       id: String(extra.id || ("omafile:" + i)),
       label: extraLabel,
-      tooltip: extraLabel,
-      icon: "󰐊",
-      command: command
+      tooltip: extraLabel + " — " + command + (trusted ? " (trusted)" : ""),
+      icon: trusted ? "󰐊" : "󰌾",
+      command: command,
+      argv: argv,
+      digest: String(extra.digest || ""),
+      trusted: trusted,
+      kind: "omafile"
     })
   }
   return actions
+}
+
+function actionList(project) {
+  return builtinActionList(project).concat(projectActionList(project))
+}
+
+function omafileConfirmMessage(project, action) {
+  var path = ""
+  if (project) path = String(project.displayPath || project.path || "")
+  if (path === "") path = "this project"
+  var command = ""
+  if (action && Array.isArray(action.argv) && action.argv.length > 0) command = action.argv.join(" ")
+  else if (action) command = String(action.command || "")
+  return "Run this Omafile command in " + path + "?\n\n" + command + "\n\nOmabench will remember this command for this project."
 }

