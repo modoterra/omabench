@@ -106,7 +106,7 @@ class DiscoverTests(unittest.TestCase):
             init_repo(root / ".hidden" / "secret")
 
             found = [str(path) for path in scan.discover_repos(root)]
-            self.assertEqual(sorted(found), [str(bills), str(echo)])
+            self.assertEqual(sorted(found), sorted([str(bills), str(echo)]))
 
     def test_missing_root_is_empty(self):
         self.assertEqual(scan.discover_repos(Path("/no/such/work/root")), [])
