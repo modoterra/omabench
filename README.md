@@ -4,6 +4,8 @@ Omabench turns `~/Work` into a desktop workspace. It walks that folder for git r
 
 Click a project to open a terminal, the editor, the folder, or GitHub, or to copy its path.
 
+![Omabench panel](preview.png)
+
 ## Install
 
 ```sh
