@@ -48,17 +48,19 @@ assert.strictEqual(
 const actions = model.actionList({ githubUrl: "" })
 assert.strictEqual(actions[3].id, "url")
 assert.strictEqual(actions[3].enabled, false)
-assert.strictEqual(actions[3].label, "Open Site")
+assert.strictEqual(actions[3].label, "Site")
+assert.strictEqual(actions[3].tooltip, "Open Site")
 
 const githubActions = model.actionList({ url: "https://github.com/modoterra/echo" })
 assert.strictEqual(githubActions[3].enabled, true)
-assert.strictEqual(githubActions[3].label, "Open GitHub")
+assert.strictEqual(githubActions[3].label, "GitHub")
+assert.strictEqual(githubActions[3].tooltip, "Open GitHub")
 
 const withExtras = model.actionList({
   url: "https://echo.dev",
   actions: [{ id: "omafile:0", label: "Dev", command: "bun run dev" }]
 })
-assert.strictEqual(withExtras[3].label, "Open Site")
+assert.strictEqual(withExtras[3].label, "Site")
 assert.strictEqual(withExtras[5].id, "omafile:0")
 assert.strictEqual(withExtras[5].label, "Dev")
 assert.strictEqual(withExtras[5].command, "bun run dev")

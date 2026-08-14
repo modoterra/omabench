@@ -23,7 +23,7 @@ Left click the mark to open the project list. Right click refreshes immediately.
 Inside the panel:
 
 - `j` / `k` or arrows: move between projects
-- `h` / `l`: move onto the action buttons
+- `h` / `l`: move onto the action pills
 - `enter` / `space`: open a terminal, or run the highlighted action
 - double click a row: open a terminal in that project
 - `t` terminal · `e` editor · `f` folder · `g` GitHub · `y` / `c` copy path

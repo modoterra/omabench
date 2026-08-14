@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -215,10 +214,10 @@ Panel {
           spacing: Style.space(12)
 
           PanelHero {
+            id: hero
             width: parent.width
             title: "Omabench"
             meta: Model.heroMeta(workspace.scanPayload)
-            detail: workspace.refreshing ? "…" : ""
             foreground: root.foreground
             fontFamily: root.fontFamily
             iconComponent: Component {
@@ -227,6 +226,19 @@ Panel {
                 color: root.markColor
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display
+              }
+            }
+            trailingControl: Component {
+              Button {
+                iconText: "󰑐"
+                tooltipText: "Refresh"
+                iconSpinning: workspace.refreshing
+                foreground: hero.foreground
+                fontFamily: hero.fontFamily
+                iconSize: Style.font.subtitle * 1.5
+                horizontalPadding: Style.space(5)
+                verticalPadding: Style.space(2)
+                onClicked: workspace.refresh()
               }
             }
           }
@@ -241,33 +253,84 @@ Panel {
             wrapMode: Text.WordWrap
           }
 
-          Text {
-            visible: projects.length === 0 && workspace.lastError === ""
-            width: parent.width
-            text: workspace.rootExists
-              ? "No git projects in " + workspace.displayRoot + "."
-              : "Work folder not found: " + workspace.displayRoot
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            wrapMode: Text.WordWrap
+          PanelSeparator {
+            foreground: root.foreground
           }
 
           Column {
-            id: projectColumn
+            width: parent.width
+            spacing: Style.space(10)
+
+            PanelSectionHeader {
+              text: "PROJECTS"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            Text {
+              visible: projects.length === 0 && workspace.lastError === ""
+              width: parent.width
+              text: workspace.rootExists
+                ? "No git projects in " + workspace.displayRoot + "."
+                : "Work folder not found: " + workspace.displayRoot
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.WordWrap
+            }
+
+            Column {
+              id: projectColumn
+              visible: projects.length > 0
+              width: parent.width
+              spacing: Style.space(4)
+
+              Repeater {
+                id: projectRepeater
+                model: projects
+                ProjectRow {
+                  required property var modelData
+                  required property int index
+                  width: projectColumn.width
+                  project: modelData
+                  rowIndex: index
+                }
+              }
+            }
+          }
+
+          PanelSeparator {
+            visible: projects.length > 0
+            foreground: root.foreground
+          }
+
+          Column {
             visible: projects.length > 0
             width: parent.width
-            spacing: Style.space(6)
+            spacing: Style.space(10)
 
-            Repeater {
-              id: projectRepeater
-              model: projects
-              ProjectRow {
-                required property var modelData
-                required property int index
-                width: projectColumn.width
-                project: modelData
-                rowIndex: index
+            PanelSectionHeader {
+              text: selectedProject ? String(selectedProject.name || "PROJECT") : "PROJECT"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            Row {
+              id: actionRow
+              width: parent.width
+              spacing: Style.space(6)
+              readonly property int count: Math.max(1, root.actions.length)
+              readonly property real cellWidth: (width - spacing * (count - 1)) / count
+
+              Repeater {
+                model: root.actions
+                ActionPill {
+                  required property var modelData
+                  required property int index
+                  width: actionRow.cellWidth
+                  action: modelData
+                  actionIndex: index
+                }
               }
             }
           }
@@ -282,7 +345,6 @@ Panel {
     property int rowIndex: 0
     readonly property bool selected: root.cursorActive && root.projectIndex === rowIndex
     readonly property var segments: Model.statusSegments(projectRow.project)
-    readonly property var rowActions: Model.actionList(projectRow.project)
 
     hasCursor: selected
     foreground: root.foreground
@@ -311,49 +373,14 @@ Panel {
       anchors.rightMargin: Style.space(10)
       spacing: Style.space(2)
 
-      RowLayout {
+      Text {
         width: parent.width
-        spacing: Style.space(8)
-
-        Text {
-          Layout.fillWidth: true
-          text: projectRow.project ? String(projectRow.project.name || "") : ""
-          color: root.foreground
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.title
-          font.bold: true
-          elide: Text.ElideRight
-        }
-
-        Row {
-          // Stay in the layout when the row is idle. Hiding this cluster
-          // made the name row shrink and the list jump on each move.
-          spacing: Style.space(2)
-          opacity: projectRow.selected ? 1 : 0
-          enabled: projectRow.selected
-
-          Repeater {
-            model: projectRow.rowActions
-            PanelActionButton {
-              required property var modelData
-              required property int index
-              iconText: modelData.icon
-              tooltipText: projectRow.selected ? modelData.label : ""
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              enabled: projectRow.selected && modelData.enabled !== false
-              hasCursor: root.focusSection === "actions" && root.actionIndex === index && projectRow.selected
-              onHovered: function(on) {
-                if (!on) return
-                root.cursorActive = true
-                root.selectedPath = projectRow.project ? String(projectRow.project.path || "") : ""
-                root.focusSection = "actions"
-                root.actionIndex = index
-              }
-              onClicked: root.runSelectedAction(modelData.id)
-            }
-          }
-        }
+        text: projectRow.project ? String(projectRow.project.name || "") : ""
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.title
+        font.bold: true
+        elide: Text.ElideRight
       }
 
       Text {
@@ -371,31 +398,36 @@ Panel {
         text: projectRow.project ? String(projectRow.project.summary || "") : ""
         color: root.dim
         font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        wrapMode: Text.WordWrap
-      }
-
-      Text {
-        width: parent.width
-        text: projectRow.project ? String(projectRow.project.branch || "") : ""
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.caption
         elide: Text.ElideRight
       }
 
-      Flow {
+      Row {
         width: parent.width
         spacing: Style.space(10)
 
-        Repeater {
-          model: projectRow.segments
-          Text {
-            required property var modelData
-            text: modelData.text
-            color: root.segmentColor(modelData.kind)
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+        Text {
+          width: Math.max(0, parent.width - statusRow.implicitWidth - parent.spacing)
+          text: projectRow.project ? String(projectRow.project.branch || "") : ""
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          elide: Text.ElideRight
+        }
+
+        Row {
+          id: statusRow
+          spacing: Style.space(8)
+
+          Repeater {
+            model: projectRow.segments
+            Text {
+              required property var modelData
+              text: modelData.text
+              color: root.segmentColor(modelData.kind)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
           }
         }
       }
@@ -409,6 +441,31 @@ Panel {
         font.pixelSize: Style.font.bodySmall
         wrapMode: Text.WordWrap
       }
+    }
+  }
+
+  component ActionPill: Button {
+    id: pill
+    property var action: null
+    property int actionIndex: 0
+
+    text: action ? String(action.label || "") : ""
+    tooltipText: action ? String(action.tooltip || action.label || "") : ""
+    fontSize: Style.font.caption
+    foreground: root.foreground
+    fontFamily: root.fontFamily
+    horizontalPadding: Style.spacing.sm
+    verticalPadding: Style.spacing.controlPaddingY
+    bordered: true
+    enabled: !action || action.enabled !== false
+    hasCursor: root.cursorActive && root.focusSection === "actions" && root.actionIndex === actionIndex
+
+    onClicked: if (pill.action) root.runSelectedAction(pill.action.id)
+    onHovered: function(on) {
+      if (!on) return
+      root.cursorActive = true
+      root.focusSection = "actions"
+      root.actionIndex = pill.actionIndex
     }
   }
 }

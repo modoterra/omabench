@@ -197,6 +197,10 @@ function isGitHubUrl(url) {
 }
 
 function urlActionLabel(project) {
+  return isGitHubUrl(projectUrl(project)) ? "GitHub" : "Site"
+}
+
+function urlActionTooltip(project) {
   return isGitHubUrl(projectUrl(project)) ? "Open GitHub" : "Open Site"
 }
 
@@ -206,25 +210,28 @@ function urlActionIcon(project) {
 
 function actionList(project) {
   var actions = [
-    { id: "terminal", label: "Open Terminal", icon: "󰆍" },
-    { id: "editor", label: "Open Editor", icon: "󰷈" },
-    { id: "folder", label: "Open Folder", icon: "󰉋" },
+    { id: "terminal", label: "Terminal", tooltip: "Open Terminal", icon: "󰆍" },
+    { id: "editor", label: "Editor", tooltip: "Open Editor", icon: "󰷈" },
+    { id: "folder", label: "Folder", tooltip: "Open Folder", icon: "󰉋" },
     {
       id: "url",
       label: urlActionLabel(project),
+      tooltip: urlActionTooltip(project),
       icon: urlActionIcon(project),
       enabled: projectUrl(project) !== ""
     },
-    { id: "copy", label: "Copy Path", icon: "󰆏" }
+    { id: "copy", label: "Copy", tooltip: "Copy Path", icon: "󰆏" }
   ]
   var extras = project && Array.isArray(project.actions) ? project.actions : []
   for (var i = 0; i < extras.length; i++) {
     var extra = extras[i] || {}
     var command = String(extra.command || "")
     if (command === "") continue
+    var extraLabel = String(extra.label || command)
     actions.push({
       id: String(extra.id || ("omafile:" + i)),
-      label: String(extra.label || command),
+      label: extraLabel,
+      tooltip: extraLabel,
       icon: "󰐊",
       command: command
     })
