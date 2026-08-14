@@ -58,12 +58,43 @@ assert.strictEqual(githubActions[3].tooltip, "Open GitHub (g · 4)")
 
 const withExtras = model.actionList({
   url: "https://echo.dev",
-  actions: [{ id: "omafile:0", label: "Dev", command: "bun run dev" }]
+  actions: [{ id: "omafile:0", label: "Dev", command: "bun run dev", argv: ["bun", "run", "dev"] }]
 })
 assert.strictEqual(withExtras[3].label, "Site")
 assert.strictEqual(withExtras[5].id, "omafile:0")
 assert.strictEqual(withExtras[5].label, "Dev")
 assert.strictEqual(withExtras[5].command, "bun run dev")
+assert.strictEqual(JSON.stringify(withExtras[5].argv), JSON.stringify(["bun", "run", "dev"]))
+assert.strictEqual(withExtras[5].kind, "omafile")
+assert.strictEqual(withExtras[5].trusted, false)
+assert.strictEqual(withExtras[5].tooltip, "Dev — bun run dev")
+assert.strictEqual(model.projectActionList({
+  actions: [{ id: "omafile:0", label: "Dev", argv: ["bun", "run", "dev"], trusted: true }]
+})[0].tooltip, "Dev — bun run dev (trusted)")
+assert.strictEqual(model.builtinActionList({}).length, 5)
+assert.strictEqual(model.sanitizeText("  Hello <script>  ", 64), "Hello script")
+assert.strictEqual(
+  model.omafileConfirmMessage(
+    { displayPath: "~/Work/echo" },
+    { argv: ["bun", "run", "dev"] }
+  ),
+  "Run this Omafile command in ~/Work/echo?\n\nbun run dev\n\nOmabench will remember this command for this project."
+)
+assert.strictEqual(JSON.stringify(model.normalizeAction({
+  id: "omafile:0",
+  label: "Dev\nBox",
+  command: "bun run dev",
+  argv: ["bun", "run", "dev"],
+  trusted: false
+}, 0)), JSON.stringify({
+  id: "omafile:0",
+  label: "Dev Box",
+  command: "bun run dev",
+  argv: ["bun", "run", "dev"],
+  digest: "",
+  trusted: false
+}))
+assert.strictEqual(model.normalizeAction({ label: "Dev", command: "curl evil" }, 0), null)
 
 assert.strictEqual(model.dirtyRatio([]), 0)
 assert.strictEqual(model.dirtyRatio(null), 0)

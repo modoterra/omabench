@@ -17,6 +17,8 @@ Item {
   property bool refreshing: false
   property string lastError: ""
   property string actionStatus: ""
+  property var pendingOmafile: null
+  property bool grantingTrust: false
 
   readonly property int dirtyCount: Model.dirtyCount(projects)
   readonly property int refreshIntervalSec: {
@@ -30,6 +32,15 @@ Item {
   }
   readonly property string helperPath: Model.filePathFromUrl(Qt.resolvedUrl("scan.py"))
   readonly property string home: Quickshell.env("HOME") || ""
+  readonly property string trustStorePath: {
+    var stateHome = String(Quickshell.env("XDG_STATE_HOME") || "").trim()
+    if (stateHome !== "") return stateHome + "/omabench/trust.json"
+    return home + "/.local/state/omabench/trust.json"
+  }
+  readonly property string pendingConfirmMessage: Model.omafileConfirmMessage(
+    pendingOmafile ? pendingOmafile.project : null,
+    pendingOmafile ? pendingOmafile.action : null
+  )
   readonly property var scanPayload: ({
     ok: lastError === "",
     root: workRoot,
@@ -64,7 +75,8 @@ Item {
       "python3", helperPath,
       "--root", workRootSetting,
       "--home", home,
-      "--max-depth", String(maxDepth)
+      "--max-depth", String(maxDepth),
+      "--trust-store", trustStorePath
     ]
     scanProcess.running = true
   }
@@ -110,6 +122,16 @@ Item {
     flash("Opened folder")
   }
 
+  function openTrustStore() {
+    if (ensureProcess.running || helperPath === "") return
+    ensureProcess.command = [
+      "python3", helperPath, "ensure",
+      "--home", home,
+      "--trust-store", trustStorePath
+    ]
+    ensureProcess.running = true
+  }
+
   function openUrl(project) {
     var url = Model.projectUrl(project)
     if (!url) {
@@ -120,13 +142,68 @@ Item {
     flash(Model.isGitHubUrl(url) ? "Opened GitHub" : "Opened site")
   }
 
-  function runOmafileCommand(project, command, label) {
-    if (!project || !project.path || !command) return
-    Util.execDetached(
-      "setsid uwsm-app -- xdg-terminal-exec --dir=" + Util.shellQuote(project.path)
-        + " -- bash -lc " + Util.shellQuote(command)
-    )
-    flash("Running " + (label || command))
+  function executeOmafileArgv(project, argv, label) {
+    if (!project || !project.path || !argv || argv.length === 0) return
+    var command = ["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + String(project.path), "--"]
+    for (var i = 0; i < argv.length; i++) command.push(String(argv[i]))
+    Quickshell.execDetached(command)
+    flash("Running " + (label || argv.join(" ")))
+  }
+
+  function markActionTrusted(path, actionId) {
+    var next = []
+    for (var i = 0; i < projects.length; i++) {
+      var project = projects[i] || {}
+      if (String(project.path || "") !== String(path || "") || !Array.isArray(project.actions)) {
+        next.push(project)
+        continue
+      }
+      var copy = Object.assign({}, project)
+      var actions = []
+      for (var j = 0; j < project.actions.length; j++) {
+        var action = Object.assign({}, project.actions[j] || {})
+        if (String(action.id || "") === String(actionId || "")) action.trusted = true
+        actions.push(action)
+      }
+      copy.actions = actions
+      next.push(copy)
+    }
+    projects = next
+  }
+
+  function requestOmafileCommand(project, action) {
+    if (!project || !project.path || !action) return
+    var argv = Array.isArray(action.argv) ? action.argv : []
+    if (argv.length === 0) {
+      flash("Command is not runnable")
+      return
+    }
+    if (action.trusted === true) {
+      executeOmafileArgv(project, argv, action.label)
+      return
+    }
+    pendingOmafile = { project: project, action: action }
+  }
+
+  function cancelPendingOmafile() {
+    if (grantingTrust) return
+    pendingOmafile = null
+  }
+
+  function confirmPendingOmafile() {
+    if (!pendingOmafile || grantingTrust || trustProcess.running || helperPath === "") return
+    var action = pendingOmafile.action || {}
+    var project = pendingOmafile.project || {}
+    grantingTrust = true
+    trustProcess.command = [
+      "python3", helperPath, "grant",
+      "--home", home,
+      "--trust-store", trustStorePath,
+      "--repo", String(project.path || ""),
+      "--argv-json", JSON.stringify(action.argv || []),
+      "--label", String(action.label || "")
+    ]
+    trustProcess.running = true
   }
 
   function copyPath(project) {
@@ -145,7 +222,7 @@ Item {
       var extras = project && Array.isArray(project.actions) ? project.actions : []
       for (var i = 0; i < extras.length; i++) {
         if (String(extras[i].id || "") === String(actionId)) {
-          runOmafileCommand(project, extras[i].command, extras[i].label)
+          requestOmafileCommand(project, extras[i])
           return
         }
       }
@@ -180,6 +257,55 @@ Item {
       var stderr = String(scanStderr.text || root._scanError || "")
       if (exitCode === 0) root.applyScan(stdout)
       else root.lastError = root.elideStatus(stderr || stdout || "Could not scan work folder")
+    }
+  }
+
+  Process {
+    id: ensureProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: ensureStdout; waitForEnd: true }
+    stderr: StdioCollector { id: ensureStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var stdout = String(ensureStdout.text || "")
+      var stderr = String(ensureStderr.text || "")
+      var payload = {}
+      try { payload = JSON.parse(stdout) } catch (e) { payload = {} }
+      if (exitCode !== 0 || payload.ok !== true) {
+        root.flash(root.elideStatus(payload.error || stderr || "Could not open trust store"))
+        return
+      }
+      var path = String(payload.path || root.trustStorePath)
+      Quickshell.execDetached(["omarchy-launch-editor", path])
+      root.flash("Opened trust store")
+    }
+  }
+
+  Process {
+    id: trustProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: trustStdout; waitForEnd: true }
+    stderr: StdioCollector { id: trustStderr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var pending = root.pendingOmafile
+      root.grantingTrust = false
+      var stdout = String(trustStdout.text || "")
+      var stderr = String(trustStderr.text || "")
+      var payload = {}
+      try { payload = JSON.parse(stdout) } catch (e) { payload = {} }
+      if (exitCode !== 0 || payload.ok !== true) {
+        root.pendingOmafile = null
+        root.flash(root.elideStatus(payload.error || stderr || "Could not save trust"))
+        return
+      }
+      if (!pending || !pending.project || !pending.action) {
+        root.pendingOmafile = null
+        return
+      }
+      root.markActionTrusted(pending.project.path, pending.action.id)
+      root.executeOmafileArgv(pending.project, pending.action.argv, pending.action.label)
+      root.pendingOmafile = null
     }
   }
 }

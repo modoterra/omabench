@@ -30,6 +30,7 @@ Inside the panel:
 - `enter` / `space`: open a terminal, or run the highlighted action
 - double click a row: open a terminal in that project
 - `t` / `1` terminal · `e` / `2` editor · `f` / `3` folder · `g` / `4` GitHub · `c` / `5` copy path
+- project commands sit in a separate row; the first click shows the real command and asks before running
 - `r` refresh
 - `esc` close
 
@@ -59,12 +60,20 @@ url = "https://github.com/modoterra/omabench"
 
 [[actions]]
 label = "Dev"
-command = "bun run dev"
+run = ["bun", "run", "dev"]
 ```
 
-`name` replaces the folder name. `summary` sits under the path. `url` feeds the GitHub or site button. Each `actions` entry becomes a button; the command runs in that project directory in a new terminal.
+`command = "bun run dev"` is also accepted when it parses to the same kind of argument list.
 
-A broken `Omafile` is shown on that row. Omabench still lists the project.
+`name` replaces the folder name. `summary` sits under the path. `url` feeds the GitHub or site button. Each allowed `actions` entry becomes a button in a **Project commands** row, not next to Terminal and Editor.
+
+An Omafile command is the same trust decision as running that project's Makefile or `package.json` script. Omabench does not run free-form shell. It only accepts a fixed set of task runners (`just`, `make`, `npm` / `pnpm` / `yarn` / `bun run`, `cargo`, `go`, `docker compose`, `python3 -m`, and a few others) with plain arguments. Labels cannot reuse built-in names such as Terminal or Editor.
+
+The first time you click a project command, the panel shows the exact arguments and the project path. **Trust** records that command for that project and then runs it in a new terminal. Later clicks of the same command skip the prompt. If the command in the Omafile changes, Omabench asks again.
+
+Trusted commands are stored in `~/.local/state/omabench/trust.json` (or `$XDG_STATE_HOME/omabench/trust.json`). The lock button left of Refresh opens that file in the editor. Delete the file to forget every remembered command.
+
+A broken or rejected `Omafile` is shown on that row. Omabench still lists the project.
 
 ## Remove
 
