@@ -1,6 +1,6 @@
 # Omabench
 
-Omabench turns `~/Work` into a desktop workspace. It walks that folder for git repositories and keeps a live row for each one: name, path, branch, dirty or clean, ahead and behind, and listening ports.
+Omabench turns selected local directories into a desktop workspace. It walks those folders for git repositories and keeps a live row for each one: name, path, branch, dirty or clean, ahead and behind, and listening ports.
 
 Click a project to open a terminal, the editor, the folder, or GitHub, or to copy its path.
 
@@ -24,6 +24,7 @@ Left click the mark to open the project list. Right click refreshes immediately.
 
 Inside the panel:
 
+- add, remove, enable, or disable scan directories at the top
 - click a project to select it (hover does not change the selection)
 - `j` / `k` or arrows: move between projects
 - `h` / `l`: move onto the action pills
@@ -36,7 +37,9 @@ Inside the panel:
 
 ## Configure
 
-The default work folder is `~/Work`. Point it somewhere else in `~/.config/omarchy/shell.json` on the `modoterra.omabench` bar entry:
+The default work folder is `~/Work`. Add more directories from the top of the Omabench menu with the path field or **Browse** button. Menu-managed directories are stored in `~/.local/state/omabench/roots.json` (or `$XDG_STATE_HOME/omabench/roots.json`).
+
+You can still seed the initial directory in `~/.config/omarchy/shell.json` on the `modoterra.omabench` bar entry:
 
 ```json
 {
@@ -44,6 +47,15 @@ The default work folder is `~/Work`. Point it somewhere else in `~/.config/omarc
   "workRoot": "~/Work",
   "refreshIntervalSec": 8,
   "maxDepth": 6
+}
+```
+
+An optional `workRoots` array can seed several initial directories before the menu state file exists:
+
+```json
+{
+  "id": "modoterra.omabench",
+  "workRoots": ["~/Work", "~/Code"]
 }
 ```
 

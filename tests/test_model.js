@@ -18,15 +18,38 @@ const parsed = model.parseScan(JSON.stringify({
   root: "/home/ada/Work",
   displayRoot: "~/Work",
   rootExists: true,
+  roots: [{ path: "~/Work", enabled: true, exists: true }],
   projects: [
     { path: "/home/ada/Work/echo", dirty: true, ports: [5173] },
     { path: "/home/ada/Work/clean", dirty: false, ports: [] }
   ]
 }))
+assert.strictEqual(parsed.roots[0].displayPath, "~/Work")
 assert.strictEqual(model.dirtyCount(parsed.projects), 1)
 assert.strictEqual(model.listeningCount(parsed.projects), 1)
 assert.strictEqual(model.heroMeta(parsed), "2 projects · 1 dirty · 1 listening")
 assert.strictEqual(model.barTooltip(parsed, false), "1 dirty · 1 listening")
+
+const multi = model.parseScan(JSON.stringify({
+  ok: true,
+  roots: [
+    { path: "~/Work", displayPath: "~/Work", enabled: true, exists: true },
+    { path: "~/Code", displayPath: "~/Code", enabled: true, exists: false },
+    { path: "~/Archive", displayPath: "~/Archive", enabled: false, exists: true }
+  ],
+  projects: [{ path: "/home/ada/Work/echo", dirty: false, ports: [] }]
+}))
+assert.strictEqual(model.enabledRootCount(multi.roots), 2)
+assert.strictEqual(model.missingRootCount(multi.roots), 1)
+assert.strictEqual(model.rootsLabel(multi), "2 directories")
+assert.strictEqual(model.heroMeta(multi), "1 project in 2 dirs · 1 missing")
+
+const noSelected = model.parseScan(JSON.stringify({
+  roots: [{ path: "~/Work", enabled: false, exists: true }],
+  projects: []
+}))
+assert.strictEqual(model.heroMeta(noSelected), "No directories selected")
+assert.strictEqual(model.barTooltip(noSelected, false), "No directories selected")
 
 const segments = model.statusSegments({
   dirty: true,

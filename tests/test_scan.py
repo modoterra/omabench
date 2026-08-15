@@ -245,6 +245,114 @@ class ScanIntegrationTests(unittest.TestCase):
             self.assertEqual(len(payload["projects"]), 1)
             self.assertEqual(payload["projects"][0]["name"], "echo")
 
+    def test_scan_roots_merges_enabled_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            one = home / "Work"
+            two = home / "Code"
+            init_repo(one / "echo")
+            init_repo(two / "kestrion")
+
+            payload = scan.scan_roots(
+                [
+                    {"path": "~/Work", "enabled": True},
+                    {"path": "~/Code", "enabled": True},
+                ],
+                home=home,
+                proc_root=Path("/no/proc"),
+            )
+
+            self.assertTrue(payload["ok"])
+            self.assertEqual([root["displayPath"] for root in payload["roots"]], ["~/Work", "~/Code"])
+            self.assertEqual(
+                sorted(project["name"] for project in payload["projects"]),
+                ["echo", "kestrion"],
+            )
+
+    def test_scan_roots_skips_disabled_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            one = home / "Work"
+            two = home / "Code"
+            init_repo(one / "echo")
+            init_repo(two / "kestrion")
+
+            payload = scan.scan_roots(
+                [
+                    {"path": "~/Work", "enabled": True},
+                    {"path": "~/Code", "enabled": False},
+                ],
+                home=home,
+                proc_root=Path("/no/proc"),
+            )
+
+            self.assertEqual([project["name"] for project in payload["projects"]], ["echo"])
+
+    def test_scan_roots_deduplicates_overlapping_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            work = home / "Work"
+            repo = init_repo(work / "apps" / "echo")
+
+            payload = scan.scan_roots(
+                [
+                    {"path": "~/Work", "enabled": True},
+                    {"path": str(repo), "enabled": True},
+                ],
+                home=home,
+                proc_root=Path("/no/proc"),
+            )
+
+            self.assertEqual([project["name"] for project in payload["projects"]], ["echo"])
+
+    def test_root_store_add_toggle_remove(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            work = home / "Work"
+            code = home / "Code"
+            work.mkdir(parents=True)
+            code.mkdir(parents=True)
+            store = Path(tmp) / "roots.json"
+
+            added = scan.add_root(store, "~/Code", ["~/Work"], home)
+            self.assertTrue(added["ok"])
+            self.assertEqual(
+                [root["displayPath"] for root in added["roots"]],
+                ["~/Work", "~/Code"],
+            )
+
+            toggled = scan.toggle_root(store, "~/Work", ["~/Work"], home)
+            self.assertTrue(toggled["ok"])
+            by_path = {root["displayPath"]: root for root in toggled["roots"]}
+            self.assertFalse(by_path["~/Work"]["enabled"])
+            self.assertTrue(by_path["~/Code"]["enabled"])
+
+            removed = scan.remove_root(store, "~/Code", ["~/Work"], home)
+            self.assertTrue(removed["ok"])
+            self.assertEqual([root["displayPath"] for root in removed["roots"]], ["~/Work"])
+
+    def test_cli_roots_uses_work_root_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            work = home / "Src"
+            work.mkdir(parents=True)
+            result = run(
+                [
+                    sys.executable,
+                    str(ROOT / "scan.py"),
+                    "roots",
+                    "--root",
+                    "~/Src",
+                    "--home",
+                    str(home),
+                    "--root-store",
+                    str(Path(tmp) / "missing.json"),
+                ],
+            )
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["roots"][0]["displayPath"], "~/Src")
+
 
 class OmafileTests(unittest.TestCase):
     def test_missing_file_is_empty(self):

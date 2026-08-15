@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -16,13 +17,18 @@ Panel {
   property string selectedPath: ""
   property string focusSection: "projects"
   property int actionIndex: 0
+  property bool preserveStateForRootPicker: false
+  property string rootPickerOutput: ""
+  property string rootPickerError: ""
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property color accent: Color.accent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property string rootPickerScript: Model.filePathFromUrl(Qt.resolvedUrl("scripts/omabench-folder-picker.sh"))
   readonly property var projects: workspace.projects
+  readonly property var roots: workspace.roots
   readonly property int projectIndex: {
     var index = Model.projectIndexByPath(projects, selectedPath)
     if (index >= 0) return index
@@ -81,9 +87,11 @@ Panel {
     if (focusSection !== "actions") {
       focusSection = "actions"
       actionIndex = dx > 0 ? 0 : actions.length - 1
+      scrollPanelItemIntoView(actionSection)
       return
     }
     actionIndex = Math.max(0, Math.min(actions.length - 1, actionIndex + dx))
+    scrollPanelItemIntoView(actionSection)
   }
 
   function activateCursor() {
@@ -109,6 +117,7 @@ Panel {
     if (index < 0 || index >= actions.length) return
     focusSection = "actions"
     actionIndex = index
+    scrollPanelItemIntoView(actionSection)
     runSelectedAction(actions[index].id)
   }
 
@@ -140,27 +149,101 @@ Panel {
       scrollItemIntoView(projectRepeater.itemAt(projectIndex))
   }
 
+  function scrollPanelItemIntoView(item) {
+    if (!contentFlick || !item) return
+    Qt.callLater(function() {
+      if (!item) return
+      var margin = Style.space(6)
+      var point = item.mapToItem(contentFlick.contentItem, 0, 0)
+      var top = point.y
+      var bottom = top + item.height
+      var viewTop = contentFlick.contentY
+      var viewBottom = viewTop + contentFlick.height
+      var maxY = Math.max(0, contentFlick.contentHeight - contentFlick.height)
+      if (top < viewTop + margin) contentFlick.contentY = Math.max(0, top - margin)
+      else if (bottom > viewBottom - margin) contentFlick.contentY = Math.min(maxY, bottom + margin - contentFlick.height)
+    })
+  }
+
+  function localPathFromUrl(url) {
+    var value = String(url || "")
+    if (value.indexOf("file://") === 0) value = value.slice(7)
+    try {
+      return decodeURIComponent(value)
+    } catch (e) {
+      return value
+    }
+  }
+
+  function submitRootPath() {
+    var path = rootPathField ? String(rootPathField.text || "").trim() : ""
+    if (path === "") {
+      workspace.flash("Choose a directory")
+      return
+    }
+    workspace.addRoot(path)
+    rootPathField.text = ""
+    keyCatcher.forceActiveFocus()
+  }
+
+  function browseForRoot() {
+    if (rootPickerProcess.running || rootPickerScript === "") return
+    rootPickerOutput = ""
+    rootPickerError = ""
+    rootPickerProcess.command = ["bash", rootPickerScript]
+    preserveStateForRootPicker = true
+    close()
+    rootPickerProcess.running = true
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
   onOpenedChanged: {
     if (!opened) {
       workspace.cancelPendingOmafile()
+      if (!preserveStateForRootPicker) rootPickerError = ""
       return
     }
     cursorActive = true
     focusSection = "projects"
     ensureSelection()
     if (panelFlick) panelFlick.contentY = 0
+    if (contentFlick) contentFlick.contentY = 0
     workspace.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
   onProjectIndexChanged: scrollCursorIntoView()
+  onProjectsChanged: ensureSelection()
 
   Service {
     id: workspace
     settings: root.settings
     opened: root.opened
+  }
+
+  Process {
+    id: rootPickerProcess
+    command: []
+    stdout: StdioCollector {
+      id: rootPickerStdout
+      waitForEnd: true
+      onStreamFinished: root.rootPickerOutput = text
+    }
+    onExited: function(exitCode) {
+      var selected = String(root.rootPickerOutput || rootPickerStdout.text || "").trim()
+      if (exitCode === 0 && selected) {
+        rootPathField.text = root.localPathFromUrl(selected)
+        root.submitRootPath()
+      } else if (exitCode !== 0) {
+        root.rootPickerError = "Folder chooser failed; enter the path manually."
+      }
+      Qt.callLater(function() {
+        root.preserveStateForRootPicker = false
+        root.open()
+        Qt.callLater(function() { rootPathField.forceActiveFocus() })
+      })
+    }
   }
 
   IpcHandler {
@@ -227,65 +310,161 @@ Panel {
         else if (t === "y" || t === "Y" || t === "c" || t === "C" || t === "5") root.runActionAt(4)
       }
 
-      Column {
-        id: column
-        width: parent.width
-        spacing: Style.space(12)
+      Flickable {
+        id: contentFlick
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: column.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+        interactive: contentHeight > height
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-        PanelHero {
-          id: hero
-          width: parent.width
-          title: "Omabench"
-          meta: Model.heroMeta(workspace.scanPayload)
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          iconComponent: Component {
-            Text {
-              text: root.mark
-              color: root.markColor
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.display
-            }
-          }
-          trailingControl: Component {
-            Row {
-              spacing: Style.space(4)
+        Column {
+          id: column
+          width: contentFlick.width
+          spacing: Style.space(12)
 
-              Button {
-                iconText: "󰌾"
-                tooltipText: "Open trust store"
-                foreground: hero.foreground
-                fontFamily: hero.fontFamily
-                iconSize: Style.font.subtitle * 1.5
-                horizontalPadding: Style.space(5)
-                verticalPadding: Style.space(2)
-                onClicked: workspace.openTrustStore()
-              }
-
-              Button {
-                iconText: "󰑐"
-                tooltipText: "Refresh"
-                iconSpinning: workspace.refreshing
-                foreground: hero.foreground
-                fontFamily: hero.fontFamily
-                iconSize: Style.font.subtitle * 1.5
-                horizontalPadding: Style.space(5)
-                verticalPadding: Style.space(2)
-                onClicked: workspace.refresh()
+          PanelHero {
+            id: hero
+            width: parent.width
+            title: "Omabench"
+            meta: Model.heroMeta(workspace.scanPayload)
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            iconComponent: Component {
+              Text {
+                text: root.mark
+                color: root.markColor
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.display
               }
             }
+            trailingControl: Component {
+              Row {
+                spacing: Style.space(4)
+
+                Button {
+                  iconText: "󰌾"
+                  tooltipText: "Open trust store"
+                  foreground: hero.foreground
+                  fontFamily: hero.fontFamily
+                  iconSize: Style.font.subtitle * 1.5
+                  horizontalPadding: Style.space(5)
+                  verticalPadding: Style.space(2)
+                  onClicked: workspace.openTrustStore()
+                }
+
+                Button {
+                  iconText: "󰑐"
+                  tooltipText: "Refresh"
+                  iconSpinning: workspace.refreshing
+                  foreground: hero.foreground
+                  fontFamily: hero.fontFamily
+                  iconSize: Style.font.subtitle * 1.5
+                  horizontalPadding: Style.space(5)
+                  verticalPadding: Style.space(2)
+                  onClicked: workspace.refresh()
+                }
+              }
+            }
           }
-        }
 
         Text {
-          visible: workspace.actionStatus !== "" || workspace.lastError !== ""
+          visible: workspace.actionStatus !== "" || workspace.lastError !== "" || root.rootPickerError !== ""
           width: parent.width
-          text: workspace.actionStatus !== "" ? workspace.actionStatus : workspace.lastError
+          text: workspace.actionStatus !== "" ? workspace.actionStatus
+            : root.rootPickerError !== "" ? root.rootPickerError
+            : workspace.lastError
           textFormat: Text.PlainText
-          color: workspace.lastError !== "" && workspace.actionStatus === "" ? root.urgent : root.dim
+          color: (workspace.lastError !== "" || root.rootPickerError !== "") && workspace.actionStatus === "" ? root.urgent : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
+        }
+
+        PanelSeparator {
+          foreground: root.foreground
+        }
+
+        PanelSectionHeader {
+          text: "DIRECTORIES"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+        }
+
+        Column {
+          width: parent.width
+          spacing: Style.space(8)
+
+          RowLayout {
+            width: parent.width
+            spacing: Style.space(6)
+
+            TextField {
+              id: rootPathField
+              Layout.fillWidth: true
+              placeholderText: "~/Work or /path/to/projects"
+              foreground: root.foreground
+              onAccepted: root.submitRootPath()
+            }
+
+            Button {
+              text: "BROWSE"
+              tooltipText: "Choose a directory"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              enabled: !rootPickerProcess.running
+              onClicked: root.browseForRoot()
+            }
+
+            Button {
+              text: "ADD"
+              tooltipText: "Add directory"
+              bordered: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              fontSize: Style.font.caption
+              enabled: !rootPickerProcess.running
+              onClicked: root.submitRootPath()
+            }
+          }
+
+          Flickable {
+            id: rootFlick
+            visible: roots.length > 0
+            width: parent.width
+            height: visible ? Math.min(rootColumn.implicitHeight, Style.space(116)) : 0
+            contentWidth: width
+            contentHeight: rootColumn.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+            interactive: contentHeight > height
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            Behavior on height {
+              NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
+            }
+
+            Column {
+              id: rootColumn
+              width: rootFlick.width
+              spacing: Style.space(4)
+
+              Repeater {
+                model: roots
+                RootRow {
+                  required property var modelData
+                  width: rootColumn.width
+                  rootData: modelData
+                }
+              }
+            }
+          }
         }
 
         PanelSeparator {
@@ -301,9 +480,10 @@ Panel {
         Text {
           visible: projects.length === 0 && workspace.lastError === ""
           width: parent.width
-          text: workspace.rootExists
-            ? "No git projects in " + workspace.displayRoot + "."
-            : "Work folder not found: " + workspace.displayRoot
+          text: Model.enabledRootCount(roots) > 0
+            && Model.missingRootCount(roots) === Model.enabledRootCount(roots)
+            ? "Selected directories were not found."
+            : "No git projects in " + Model.rootsLabel(workspace.scanPayload) + "."
           textFormat: Text.PlainText
           color: root.dim
           font.family: root.fontFamily
@@ -315,7 +495,7 @@ Panel {
           id: panelFlick
           visible: projects.length > 0
           width: parent.width
-          height: visible ? Math.min(projectColumn.implicitHeight, Style.space(320)) : 0
+          height: visible ? Math.min(projectColumn.implicitHeight, Style.space(220)) : 0
           contentWidth: width
           contentHeight: projectColumn.implicitHeight
           clip: true
@@ -323,6 +503,10 @@ Panel {
           flickableDirection: Flickable.VerticalFlick
           interactive: contentHeight > height
           ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+          Behavior on height {
+            NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
+          }
 
           Column {
             id: projectColumn
@@ -349,6 +533,7 @@ Panel {
         }
 
         Column {
+          id: actionSection
           visible: projects.length > 0
           width: parent.width
           spacing: Style.space(10)
@@ -409,6 +594,7 @@ Panel {
             }
           }
         }
+      }
       }
 
       ConfirmDialog {
@@ -535,6 +721,71 @@ Panel {
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
         wrapMode: Text.WordWrap
+      }
+    }
+  }
+
+  component RootRow: CursorSurface {
+    id: rootRow
+    property var rootData: null
+    readonly property bool enabledRoot: rootData ? rootData.enabled !== false : false
+    readonly property bool missingRoot: rootData ? rootData.exists === false : false
+    readonly property string rootPath: rootData ? String(rootData.path || rootData.displayPath || rootData.resolvedPath || "") : ""
+
+    foreground: root.foreground
+    borderSpec: Border.none()
+    implicitHeight: rowLayout.implicitHeight + Style.space(6)
+
+    RowLayout {
+      id: rowLayout
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(8)
+      anchors.rightMargin: Style.space(8)
+      spacing: Style.space(8)
+
+      CheckBox {
+        checked: rootRow.enabledRoot
+        onClicked: workspace.toggleRoot(rootRow.rootPath)
+      }
+
+      Column {
+        Layout.fillWidth: true
+        spacing: Style.space(1)
+
+        Text {
+          width: parent.width
+          text: rootRow.rootData ? String(rootRow.rootData.displayPath || rootRow.rootPath) : ""
+          textFormat: Text.PlainText
+          color: rootRow.enabledRoot ? root.foreground : root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          elide: Text.ElideMiddle
+        }
+
+        Text {
+          visible: rootRow.missingRoot
+          width: parent.width
+          text: "Folder missing"
+          textFormat: Text.PlainText
+          color: root.urgent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
+      }
+
+      Button {
+        iconText: "󰆴"
+        tooltipText: "Remove directory"
+        bordered: true
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        iconSize: Style.font.body
+        horizontalPadding: Style.space(5)
+        verticalPadding: Style.space(2)
+        onClicked: workspace.removeRoot(rootRow.rootPath)
       }
     }
   }

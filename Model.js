@@ -4,6 +4,7 @@ function emptyScan() {
     root: "",
     displayRoot: "~/Work",
     rootExists: true,
+    roots: [],
     projects: [],
     error: ""
   }
@@ -39,6 +40,9 @@ function parseScan(raw) {
     parsed.root = String(parsed.root || "")
     parsed.displayRoot = String(parsed.displayRoot || parsed.root || "~/Work")
     parsed.rootExists = parsed.rootExists !== false
+    parsed.roots = Array.isArray(parsed.roots) ? parsed.roots.map(normalizeRoot).filter(function(root) {
+      return root !== null
+    }) : []
     parsed.projects = Array.isArray(parsed.projects) ? parsed.projects.map(normalizeProject) : []
     parsed.error = String(parsed.error || "")
     return parsed
@@ -47,6 +51,21 @@ function parseScan(raw) {
     failed.ok = false
     failed.error = "Failed to read project state"
     return failed
+  }
+}
+
+function normalizeRoot(root) {
+  if (!root || typeof root !== "object") return null
+  var path = sanitizeText(root.path || root.displayPath || root.resolvedPath || "", 500)
+  var displayPath = sanitizeText(root.displayPath || path, 500)
+  var resolvedPath = sanitizeText(root.resolvedPath || path, 500)
+  if (path === "" && displayPath === "" && resolvedPath === "") return null
+  return {
+    path: path || displayPath || resolvedPath,
+    displayPath: displayPath || path || resolvedPath,
+    resolvedPath: resolvedPath || path || displayPath,
+    enabled: root.enabled !== false,
+    exists: root.exists !== false
   }
 }
 
@@ -146,18 +165,53 @@ function listeningCount(projects) {
   return count
 }
 
+function enabledRootCount(roots) {
+  var count = 0
+  var list = roots || []
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].enabled !== false) count++
+  }
+  return count
+}
+
+function missingRootCount(roots) {
+  var count = 0
+  var list = roots || []
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].enabled !== false && list[i].exists === false) count++
+  }
+  return count
+}
+
 function plural(count, one, many) {
   return count === 1 ? one : many
 }
 
+function rootsLabel(payload) {
+  var scan = payload || emptyScan()
+  var roots = scan.roots || []
+  var enabled = enabledRootCount(roots)
+  if (enabled <= 1) return scan.displayRoot || "~/Work"
+  return enabled + " directories"
+}
+
 function heroMeta(payload) {
   var scan = payload || emptyScan()
-  if (!scan.rootExists) return "Folder missing"
+  var roots = scan.roots || []
+  var missing = missingRootCount(roots)
+  var enabled = enabledRootCount(roots)
+  if (enabled === 0 && roots.length > 0) return "No directories selected"
+  if (!scan.rootExists && roots.length <= 1) return "Folder missing"
   var projects = scan.projects || []
-  if (projects.length === 0) return "No git projects"
+  if (projects.length === 0) {
+    if (missing > 0 && missing === enabled) return "Directories missing"
+    return "No git projects"
+  }
   var dirty = dirtyCount(projects)
   var listening = listeningCount(projects)
   var text = projects.length + " " + plural(projects.length, "project", "projects")
+  if (enabled > 1) text += " in " + enabled + " dirs"
+  if (missing > 0) text += " · " + missing + " missing"
   if (dirty > 0) text += " · " + dirty + " dirty"
   if (listening > 0) text += " · " + listening + " listening"
   return text
@@ -165,11 +219,19 @@ function heroMeta(payload) {
 
 function barTooltip(payload, refreshing) {
   var scan = payload || emptyScan()
+  var roots = scan.roots || []
+  var enabled = enabledRootCount(roots)
+  var missing = missingRootCount(roots)
+  var label = rootsLabel(scan)
   if (refreshing && (!scan.projects || scan.projects.length === 0) && scan.error === "")
-    return "Scanning " + scan.displayRoot
-  if (!scan.rootExists) return "Work folder not found: " + scan.displayRoot
+    return "Scanning " + label
+  if (enabled === 0 && roots.length > 0) return "No directories selected"
+  if (!scan.rootExists && roots.length <= 1) return "Work folder not found: " + scan.displayRoot
   var projects = scan.projects || []
-  if (projects.length === 0) return "No git projects in " + scan.displayRoot
+  if (projects.length === 0) {
+    if (missing > 0 && missing === enabled) return "Selected directories were not found"
+    return "No git projects in " + label
+  }
   var dirty = dirtyCount(projects)
   var listening = listeningCount(projects)
   if (dirty === 0 && listening === 0) return projects.length + " projects · all clean"
