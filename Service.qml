@@ -11,6 +11,7 @@ Item {
   property bool opened: false
 
   property var projects: []
+  property var roots: []
   property string workRoot: ""
   property string displayRoot: "~/Work"
   property bool rootExists: true
@@ -30,12 +31,28 @@ Item {
     var value = String(setting("workRoot", "~/Work") || "~/Work").trim()
     return value === "" ? "~/Work" : value
   }
+  readonly property var workRootsSetting: {
+    var value = setting("workRoots", null)
+    if (!Array.isArray(value)) return [workRootSetting]
+    var roots = []
+    for (var i = 0; i < value.length; i++) {
+      var path = String(value[i] || "").trim()
+      if (path !== "") roots.push(path)
+    }
+    return roots.length > 0 ? roots : [workRootSetting]
+  }
+  readonly property string workRootsJson: JSON.stringify(workRootsSetting)
   readonly property string helperPath: Model.filePathFromUrl(Qt.resolvedUrl("scan.py"))
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string trustStorePath: {
     var stateHome = String(Quickshell.env("XDG_STATE_HOME") || "").trim()
     if (stateHome !== "") return stateHome + "/omabench/trust.json"
     return home + "/.local/state/omabench/trust.json"
+  }
+  readonly property string rootStorePath: {
+    var stateHome = String(Quickshell.env("XDG_STATE_HOME") || "").trim()
+    if (stateHome !== "") return stateHome + "/omabench/roots.json"
+    return home + "/.local/state/omabench/roots.json"
   }
   readonly property string pendingConfirmMessage: Model.omafileConfirmMessage(
     pendingOmafile ? pendingOmafile.project : null,
@@ -46,12 +63,16 @@ Item {
     root: workRoot,
     displayRoot: displayRoot,
     rootExists: rootExists,
+    roots: roots,
     projects: projects,
     error: lastError
   })
 
   property string _scanOutput: ""
   property string _scanError: ""
+  property string _rootOutput: ""
+  property string _rootError: ""
+  property bool _refreshQueued: false
 
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined
@@ -67,13 +88,20 @@ Item {
   }
 
   function refresh() {
-    if (scanProcess.running || helperPath === "") return
+    if (helperPath === "") return
+    if (scanProcess.running) {
+      _refreshQueued = true
+      return
+    }
+    _refreshQueued = false
     _scanOutput = ""
     _scanError = ""
     refreshing = true
     scanProcess.command = [
       "python3", helperPath,
       "--root", workRootSetting,
+      "--roots-json", workRootsJson,
+      "--root-store", rootStorePath,
       "--home", home,
       "--max-depth", String(maxDepth),
       "--trust-store", trustStorePath
@@ -90,8 +118,36 @@ Item {
     workRoot = parsed.root
     displayRoot = parsed.displayRoot
     rootExists = parsed.rootExists === true
+    roots = parsed.roots
     projects = parsed.projects
     lastError = parsed.error
+  }
+
+  function runRootCommand(action, path) {
+    if (rootProcess.running || helperPath === "") return
+    _rootOutput = ""
+    _rootError = ""
+    rootProcess.command = [
+      "python3", helperPath, action,
+      "--root", workRootSetting,
+      "--roots-json", workRootsJson,
+      "--root-store", rootStorePath,
+      "--home", home,
+      "--path", String(path || "")
+    ]
+    rootProcess.running = true
+  }
+
+  function addRoot(path) {
+    runRootCommand("add-root", path)
+  }
+
+  function toggleRoot(path) {
+    runRootCommand("toggle-root", path)
+  }
+
+  function removeRoot(path) {
+    runRootCommand("remove-root", path)
   }
 
   function elideStatus(text) {
@@ -104,16 +160,44 @@ Item {
     actionStatusTimer.restart()
   }
 
-  function openTerminal(project) {
+  function projectTmuxName(project) {
+    var name = String((project && project.name) || "")
+    if (name === "") {
+      var path = String((project && project.path) || "").replace(/\/+$/, "")
+      var parts = path.split("/")
+      name = parts.length > 0 ? parts[parts.length - 1] : "project"
+    }
+    name = name.replace(/[:.]/g, "-").replace(/[^A-Za-z0-9_-]/g, "-")
+    return name === "" ? "project" : name
+  }
+
+  function openProjectTmux(project, editor) {
     if (!project || !project.path) return
-    Util.execDetached("setsid uwsm-app -- xdg-terminal-exec --dir=" + Util.shellQuote(project.path))
-    flash("Opened terminal")
+    var script = editor
+      ? "session=Work; dir=$1; name=$2; cmd='omarchy-launch-editor --inline .'; "
+        + "if tmux has-session -t \"$session\" 2>/dev/null; then "
+        + "tmux new-window -t \"$session:\" -c \"$dir\" -n \"$name\" \"$cmd\"; "
+        + "exec tmux attach-session -t \"$session\"; "
+        + "else exec tmux new-session -s \"$session\" -c \"$dir\" -n \"$name\" \"$cmd\"; fi"
+      : "session=Work; dir=$1; name=$2; "
+        + "if tmux has-session -t \"$session\" 2>/dev/null; then "
+        + "tmux new-window -t \"$session:\" -c \"$dir\" -n \"$name\"; "
+        + "exec tmux attach-session -t \"$session\"; "
+        + "else exec tmux new-session -s \"$session\" -c \"$dir\" -n \"$name\"; fi"
+    Quickshell.execDetached([
+      "setsid", "uwsm-app", "--", "xdg-terminal-exec",
+      "--dir=" + String(project.path),
+      "--", "bash", "-lc", script, "omabench", String(project.path), projectTmuxName(project)
+    ])
+    flash(editor ? "Opened editor in tmux" : "Opened tmux")
+  }
+
+  function openTerminal(project) {
+    openProjectTmux(project, false)
   }
 
   function openEditor(project) {
-    if (!project || !project.path) return
-    Util.execDetached("omarchy-launch-editor " + Util.shellQuote(project.path))
-    flash("Opened editor")
+    openProjectTmux(project, true)
   }
 
   function openFolder(project) {
@@ -257,6 +341,7 @@ Item {
       var stderr = String(scanStderr.text || root._scanError || "")
       if (exitCode === 0) root.applyScan(stdout)
       else root.lastError = root.elideStatus(stderr || stdout || "Could not scan work folder")
+      if (root._refreshQueued) root.refresh()
     }
   }
 
@@ -278,6 +363,29 @@ Item {
       var path = String(payload.path || root.trustStorePath)
       Quickshell.execDetached(["omarchy-launch-editor", path])
       root.flash("Opened trust store")
+    }
+  }
+
+  Process {
+    id: rootProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: rootStdout; waitForEnd: true; onStreamFinished: root._rootOutput = text }
+    stderr: StdioCollector { id: rootStderr; waitForEnd: true; onStreamFinished: root._rootError = text }
+    onExited: function(exitCode) {
+      var stdout = String(rootStdout.text || root._rootOutput || "")
+      var stderr = String(rootStderr.text || root._rootError || "")
+      var payload = {}
+      try { payload = JSON.parse(stdout) } catch (e) { payload = {} }
+      if (Array.isArray(payload.roots)) roots = payload.roots.map(Model.normalizeRoot).filter(function(item) {
+        return item !== null
+      })
+      if (exitCode !== 0 || payload.ok !== true) {
+        root.flash(root.elideStatus(payload.error || stderr || "Could not update directories"))
+        return
+      }
+      root.flash("Updated directories")
+      root.refresh()
     }
   }
 

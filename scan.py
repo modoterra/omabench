@@ -78,6 +78,7 @@ GIT_SAFE_CONFIG = (
 )
 
 TRUST_STORE_VERSION = 1
+ROOT_STORE_VERSION = 1
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
 SKIP_DIR_NAMES = frozenset(
@@ -342,6 +343,13 @@ def default_trust_store(home: Path) -> Path:
     return home / ".local" / "state" / "omabench" / "trust.json"
 
 
+def default_root_store(home: Path) -> Path:
+    xdg = str(os.environ.get("XDG_STATE_HOME") or "").strip()
+    if xdg:
+        return Path(xdg) / "omabench" / "roots.json"
+    return home / ".local" / "state" / "omabench" / "roots.json"
+
+
 def action_digest(path: str, argv: list[str]) -> str:
     payload = json.dumps(
         {"path": path, "argv": argv},
@@ -502,6 +510,182 @@ def ensure_trust_store(store_path: Path) -> dict:
     if write_error:
         return {"ok": False, "error": write_error, "path": resolved}
     return {"ok": True, "error": "", "path": resolved}
+
+
+def root_store_defaults(raw_roots: list[str], home: Path) -> list[dict]:
+    roots = raw_roots or ["~/Work"]
+    return normalize_root_entries(
+        [{"path": root, "enabled": True} for root in roots],
+        home,
+    )
+
+
+def normalize_root_entry(raw: object, home: Path) -> dict | None:
+    if isinstance(raw, str):
+        path_text = raw
+        enabled = True
+    elif isinstance(raw, dict):
+        path_text = str(raw.get("path") or "").strip()
+        enabled = raw.get("enabled") is not False
+    else:
+        return None
+
+    if path_text == "":
+        return None
+    resolved = resolve_root(path_text, home)
+    try:
+        if not resolved.is_absolute():
+            resolved = (home / resolved).resolve()
+        else:
+            resolved = resolved.resolve()
+    except OSError:
+        pass
+    display = display_path(resolved, home)
+    return {
+        "path": display,
+        "displayPath": display,
+        "resolvedPath": str(resolved),
+        "enabled": bool(enabled),
+        "exists": resolved.is_dir(),
+    }
+
+
+def normalize_root_entries(raw_roots: list[object], home: Path) -> list[dict]:
+    roots: list[dict] = []
+    seen: set[str] = set()
+    for raw in raw_roots:
+        item = normalize_root_entry(raw, home)
+        if item is None:
+            continue
+        key = item["resolvedPath"]
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(item)
+    return roots
+
+
+def parse_default_roots(raw: str, fallback_root: str) -> list[str]:
+    text = str(raw or "").strip()
+    if text == "":
+        return [fallback_root]
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return [fallback_root]
+    if not isinstance(parsed, list):
+        return [fallback_root]
+    roots = [str(item).strip() for item in parsed if isinstance(item, str) and item.strip()]
+    return roots or [fallback_root]
+
+
+def load_root_store(store_path: Path | None, defaults: list[str], home: Path) -> dict:
+    default_roots = root_store_defaults(defaults, home)
+    if store_path is None:
+        return {"version": ROOT_STORE_VERSION, "roots": default_roots, "error": ""}
+    if _is_symlink(store_path):
+        return {
+            "version": ROOT_STORE_VERSION,
+            "roots": default_roots,
+            "error": "Root store must not be a symlink",
+        }
+    if not store_path.is_file():
+        return {"version": ROOT_STORE_VERSION, "roots": default_roots, "error": ""}
+    try:
+        raw = store_path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return {
+            "version": ROOT_STORE_VERSION,
+            "roots": default_roots,
+            "error": "Could not read directory settings",
+        }
+    if not isinstance(data, dict) or data.get("version") != ROOT_STORE_VERSION:
+        return {"version": ROOT_STORE_VERSION, "roots": default_roots, "error": ""}
+    raw_roots = data.get("roots")
+    if not isinstance(raw_roots, list):
+        return {"version": ROOT_STORE_VERSION, "roots": default_roots, "error": ""}
+    roots = normalize_root_entries(raw_roots, home)
+    return {"version": ROOT_STORE_VERSION, "roots": roots or default_roots, "error": ""}
+
+
+def save_root_store(store_path: Path, roots: list[dict]) -> str:
+    if _is_symlink(store_path):
+        return "Root store must not be a symlink"
+    try:
+        store_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        return f"Could not create root store: {exc}"
+    if _is_symlink(store_path.parent):
+        return "Root store directory must not be a symlink"
+
+    payload = {
+        "version": ROOT_STORE_VERSION,
+        "roots": [
+            {"path": root["path"], "enabled": root.get("enabled") is not False}
+            for root in roots
+        ],
+    }
+    tmp_path = store_path.with_name(store_path.name + ".tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)
+        os.replace(tmp_path, store_path)
+    except OSError as exc:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return f"Could not write root store: {exc}"
+    return ""
+
+
+def add_root(store_path: Path, raw_path: str, defaults: list[str], home: Path) -> dict:
+    store = load_root_store(store_path, defaults, home)
+    item = normalize_root_entry(raw_path, home)
+    if item is None:
+        return {"ok": False, "error": "Choose a directory", "roots": store["roots"]}
+    roots = list(store["roots"])
+    for index, root in enumerate(roots):
+        if root["resolvedPath"] == item["resolvedPath"]:
+            roots[index] = dict(root, enabled=True, exists=item["exists"])
+            error = save_root_store(store_path, roots)
+            return {"ok": error == "", "error": error, "roots": roots}
+    roots.append(item)
+    error = save_root_store(store_path, roots)
+    return {"ok": error == "", "error": error, "roots": roots}
+
+
+def remove_root(store_path: Path, raw_path: str, defaults: list[str], home: Path) -> dict:
+    store = load_root_store(store_path, defaults, home)
+    item = normalize_root_entry(raw_path, home)
+    if item is None:
+        return {"ok": False, "error": "Choose a directory", "roots": store["roots"]}
+    roots = [root for root in store["roots"] if root["resolvedPath"] != item["resolvedPath"]]
+    if not roots:
+        roots = root_store_defaults(defaults, home)
+    error = save_root_store(store_path, roots)
+    return {"ok": error == "", "error": error, "roots": roots}
+
+
+def toggle_root(store_path: Path, raw_path: str, defaults: list[str], home: Path) -> dict:
+    store = load_root_store(store_path, defaults, home)
+    item = normalize_root_entry(raw_path, home)
+    if item is None:
+        return {"ok": False, "error": "Choose a directory", "roots": store["roots"]}
+    roots: list[dict] = []
+    changed = False
+    for root in store["roots"]:
+        if root["resolvedPath"] == item["resolvedPath"]:
+            root = dict(root)
+            root["enabled"] = root.get("enabled") is False
+            root["exists"] = item["exists"]
+            changed = True
+        roots.append(root)
+    if not changed:
+        roots.append(item)
+    error = save_root_store(store_path, roots)
+    return {"ok": error == "", "error": error, "roots": roots}
 
 
 def github_url(remote: str) -> str:
@@ -967,16 +1151,90 @@ def scan_work(
     return payload
 
 
+def scan_roots(
+    roots: list[dict],
+    home: Path | None = None,
+    proc_root: Path | None = None,
+    max_depth: int = 6,
+    trust_store_path: Path | None = None,
+) -> dict:
+    home_path = home if home is not None else Path.home()
+    try:
+        home_path = home_path.resolve()
+    except OSError:
+        pass
+
+    normalized = normalize_root_entries(roots, home_path)
+    enabled = [root for root in normalized if root.get("enabled") is not False]
+    first = enabled[0] if enabled else (normalized[0] if normalized else None)
+    payload = {
+        "ok": True,
+        "root": first["resolvedPath"] if first else "",
+        "displayRoot": first["displayPath"] if first else "",
+        "rootExists": bool(first and first["exists"]),
+        "roots": normalized,
+        "projects": [],
+        "error": "",
+    }
+    if not normalized:
+        payload["error"] = "No directories configured"
+        return payload
+    if not enabled:
+        payload["error"] = "No directories selected"
+        return payload
+
+    repos_by_path: dict[str, Path] = {}
+    for root in enabled:
+        path = Path(root["resolvedPath"])
+        if not root["exists"]:
+            continue
+        for repo in discover_repos(path, max_depth=max_depth):
+            try:
+                key = str(repo.resolve())
+            except OSError:
+                key = str(repo)
+            repos_by_path.setdefault(key, repo)
+
+    repos = list(repos_by_path.values())
+    if not repos:
+        missing = [root["displayPath"] for root in enabled if not root["exists"]]
+        if missing and len(missing) == len(enabled):
+            payload["error"] = "Selected directories were not found"
+        return payload
+
+    store_path = trust_store_path if trust_store_path is not None else default_trust_store(home_path)
+    store = load_trust_store(store_path)
+    workers = min(8, len(repos))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        projects = list(
+            pool.map(
+                lambda repo: git_state(
+                    repo,
+                    home=home_path,
+                    trust_store=store,
+                ),
+                repos,
+            )
+        )
+
+    assign_ports(projects, proc_root if proc_root is not None else Path("/proc"))
+    payload["projects"] = sort_projects(projects)
+    return payload
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Scan a work folder for git project state.")
     parser.add_argument(
         "action",
         nargs="?",
         default="scan",
-        choices=("scan", "grant", "revoke", "ensure"),
-        help="scan projects, grant/revoke an Omafile command, or create the trust store",
+        choices=("scan", "grant", "revoke", "ensure", "roots", "add-root", "remove-root", "toggle-root"),
+        help="scan projects, manage roots, grant/revoke an Omafile command, or create the trust store",
     )
     parser.add_argument("--root", default="~/Work", help="Work folder to scan (default: ~/Work)")
+    parser.add_argument("--roots-json", default="", help="JSON array of default work folders")
+    parser.add_argument("--root-store", default="", help="Directory settings JSON path")
+    parser.add_argument("--path", default="", help="Directory path for add-root/remove-root/toggle-root")
     parser.add_argument("--home", default=str(Path.home()), help="Home directory used for ~ display")
     parser.add_argument("--max-depth", type=int, default=6, help="Maximum search depth from the work root")
     parser.add_argument("--proc", default="/proc", help="proc filesystem used to map listening ports")
@@ -1005,6 +1263,26 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     home = Path(args.home)
     store_path = Path(args.trust_store) if str(args.trust_store or "").strip() else default_trust_store(home)
+    root_store_path = Path(args.root_store) if str(args.root_store or "").strip() else default_root_store(home)
+    default_roots = parse_default_roots(args.roots_json, args.root)
+
+    if args.action in {"roots", "add-root", "remove-root", "toggle-root"}:
+        if args.action == "roots":
+            store = load_root_store(root_store_path, default_roots, home)
+            payload = {
+                "ok": store["error"] == "",
+                "error": store["error"],
+                "roots": store["roots"],
+            }
+        elif args.action == "add-root":
+            payload = add_root(root_store_path, args.path, default_roots, home)
+        elif args.action == "remove-root":
+            payload = remove_root(root_store_path, args.path, default_roots, home)
+        else:
+            payload = toggle_root(root_store_path, args.path, default_roots, home)
+        json.dump(payload, sys.stdout, separators=(",", ":"))
+        sys.stdout.write("\n")
+        return 0 if payload.get("ok") else 1
 
     if args.action == "ensure":
         payload = ensure_trust_store(store_path)
@@ -1038,15 +1316,17 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write("\n")
         return 0 if payload.get("ok") else 1
 
-    root = resolve_root(args.root, home)
     max_depth = args.max_depth if args.max_depth > 0 else 6
-    payload = scan_work(
-        root,
+    root_store = load_root_store(root_store_path, default_roots, home)
+    payload = scan_roots(
+        root_store["roots"],
         home=home,
         proc_root=Path(args.proc),
         max_depth=max_depth,
         trust_store_path=store_path,
     )
+    if root_store["error"] and payload["error"] == "":
+        payload["error"] = root_store["error"]
     json.dump(payload, sys.stdout, separators=(",", ":"))
     sys.stdout.write("\n")
     return 0 if payload.get("ok") else 1
