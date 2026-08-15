@@ -115,23 +115,51 @@ assert.ok(dirtyHsl.h < 0.05)
 assert.ok(Math.abs(cleanHsl.s - dirtyHsl.s) < 0.001)
 assert.ok(Math.abs(cleanHsl.l - dirtyHsl.l) < 0.001)
 
+assert.strictEqual(JSON.stringify(model.terminalLaunchArgv(
+  "/home/ada/Work/echo",
+  "/usr/bin/bash",
+  null,
+  "com.mitchellh.ghostty.desktop"
+)), JSON.stringify([
+  "setsid", "uwsm-app", "--",
+  "ghostty", "+new-window", "--working-directory=/home/ada/Work/echo"
+]))
+assert.strictEqual(JSON.stringify(model.terminalLaunchArgv(
+  "/home/ada/Work/echo",
+  "/usr/bin/bash",
+  ["python3", "-m", "unittest", "discover", "-s", "tests"],
+  "com.mitchellh.ghostty.desktop"
+)), JSON.stringify([
+  "setsid", "uwsm-app", "--",
+  "ghostty", "+new-window", "--working-directory=/home/ada/Work/echo",
+  "-e", "python3", "-m", "unittest", "discover", "-s", "tests"
+]))
+assert.strictEqual(JSON.stringify(model.terminalLaunchArgv(
+  "/home/ada/Work/echo",
+  "/usr/bin/bash",
+  null,
+  "Alacritty.desktop"
+)), JSON.stringify([
+  "setsid", "uwsm-app", "--",
+  "xdg-terminal-exec", "--dir=/home/ada/Work/echo"
+]))
+assert.strictEqual(JSON.stringify(model.terminalLaunchArgv(
+  "/home/ada/Work/echo",
+  "/usr/bin/bash",
+  ["python3", "-m", "unittest"],
+  "Alacritty.desktop"
+)), JSON.stringify([
+  "setsid", "uwsm-app", "--",
+  "xdg-terminal-exec", "--dir=/home/ada/Work/echo", "--",
+  "python3", "-m", "unittest"
+]))
 assert.strictEqual(JSON.stringify(model.terminalLaunchArgv("/home/ada/Work/echo", "/usr/bin/bash")), JSON.stringify([
   "setsid", "uwsm-app", "--",
   "xdg-terminal-exec", "--dir=/home/ada/Work/echo", "--",
   "env", "-C", "/home/ada/Work/echo", "--",
   "/usr/bin/bash"
 ]))
-assert.strictEqual(JSON.stringify(model.terminalLaunchArgv(
-  "/home/ada/Work/echo",
-  "",
-  ["python3", "-m", "unittest", "discover", "-s", "tests"]
-)), JSON.stringify([
-  "setsid", "uwsm-app", "--",
-  "xdg-terminal-exec", "--dir=/home/ada/Work/echo", "--",
-  "env", "-C", "/home/ada/Work/echo", "--",
-  "python3", "-m", "unittest", "discover", "-s", "tests"
-]))
-assert.strictEqual(JSON.stringify(model.terminalLaunchArgv("", "/usr/bin/bash")), JSON.stringify([]))
+assert.strictEqual(JSON.stringify(model.terminalLaunchArgv("", "/usr/bin/bash", null, "com.mitchellh.ghostty.desktop")), JSON.stringify([]))
 assert.strictEqual(JSON.stringify(model.terminalLaunchArgv("/home/ada/Work/echo", "  ", [])), JSON.stringify([
   "setsid", "uwsm-app", "--",
   "xdg-terminal-exec", "--dir=/home/ada/Work/echo", "--",
@@ -141,7 +169,8 @@ assert.strictEqual(JSON.stringify(model.terminalLaunchArgv("/home/ada/Work/echo"
 assert.strictEqual(JSON.stringify(model.terminalLaunchArgv(
   "/home/ada/Work/echo",
   "/usr/bin/bash",
-  ["python3", "", "unittest"]
+  ["python3", "", "unittest"],
+  "com.mitchellh.ghostty.desktop"
 )), JSON.stringify([]))
 
 console.log("ok")

@@ -19,6 +19,7 @@ Item {
   property string actionStatus: ""
   property var pendingOmafile: null
   property bool grantingTrust: false
+  property string terminalId: ""
 
   readonly property int dirtyCount: Model.dirtyCount(projects)
   readonly property int refreshIntervalSec: {
@@ -106,7 +107,12 @@ Item {
 
   function openTerminal(project) {
     if (!project || !project.path) return
-    var command = Model.terminalLaunchArgv(project.path, Quickshell.env("SHELL") || "bash")
+    var command = Model.terminalLaunchArgv(
+      project.path,
+      Quickshell.env("SHELL") || "bash",
+      null,
+      terminalId
+    )
     if (command.length === 0) return
     Quickshell.execDetached(command)
     flash("Opened terminal")
@@ -146,7 +152,12 @@ Item {
 
   function executeOmafileArgv(project, argv, label) {
     if (!project || !project.path || !argv || argv.length === 0) return
-    var command = Model.terminalLaunchArgv(project.path, Quickshell.env("SHELL") || "bash", argv)
+    var command = Model.terminalLaunchArgv(
+      project.path,
+      Quickshell.env("SHELL") || "bash",
+      argv,
+      terminalId
+    )
     if (command.length === 0) return
     Quickshell.execDetached(command)
     flash("Running " + (label || argv.join(" ")))
@@ -228,6 +239,17 @@ Item {
           return
         }
       }
+    }
+  }
+
+  Process {
+    id: terminalIdProcess
+    running: true
+    command: ["xdg-terminal-exec", "--print-id"]
+    stdout: StdioCollector {
+      id: terminalIdStdout
+      waitForEnd: true
+      onStreamFinished: root.terminalId = String(text || "").trim()
     }
   }
 
