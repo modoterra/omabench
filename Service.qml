@@ -19,6 +19,7 @@ Item {
   property string actionStatus: ""
   property var pendingOmafile: null
   property bool grantingTrust: false
+  property string terminalId: ""
 
   readonly property int dirtyCount: Model.dirtyCount(projects)
   readonly property int refreshIntervalSec: {
@@ -106,7 +107,14 @@ Item {
 
   function openTerminal(project) {
     if (!project || !project.path) return
-    Util.execDetached("setsid uwsm-app -- xdg-terminal-exec --dir=" + Util.shellQuote(project.path))
+    var command = Model.terminalLaunchArgv(
+      project.path,
+      Quickshell.env("SHELL") || "bash",
+      null,
+      terminalId
+    )
+    if (command.length === 0) return
+    Quickshell.execDetached(command)
     flash("Opened terminal")
   }
 
@@ -144,8 +152,13 @@ Item {
 
   function executeOmafileArgv(project, argv, label) {
     if (!project || !project.path || !argv || argv.length === 0) return
-    var command = ["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + String(project.path), "--"]
-    for (var i = 0; i < argv.length; i++) command.push(String(argv[i]))
+    var command = Model.terminalLaunchArgv(
+      project.path,
+      Quickshell.env("SHELL") || "bash",
+      argv,
+      terminalId
+    )
+    if (command.length === 0) return
     Quickshell.execDetached(command)
     flash("Running " + (label || argv.join(" ")))
   }
@@ -226,6 +239,17 @@ Item {
           return
         }
       }
+    }
+  }
+
+  Process {
+    id: terminalIdProcess
+    running: true
+    command: ["xdg-terminal-exec", "--print-id"]
+    stdout: StdioCollector {
+      id: terminalIdStdout
+      waitForEnd: true
+      onStreamFinished: root.terminalId = String(text || "").trim()
     }
   }
 

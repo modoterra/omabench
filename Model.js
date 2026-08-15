@@ -299,6 +299,47 @@ function actionList(project) {
   return builtinActionList(project).concat(projectActionList(project))
 }
 
+function terminalLaunchArgv(path, shell, commandArgv, terminalId) {
+  var dir = String(path || "")
+  if (dir === "") return []
+  var extra = []
+  if (Array.isArray(commandArgv) && commandArgv.length > 0) {
+    for (var i = 0; i < commandArgv.length; i++) {
+      var part = String(commandArgv[i] || "")
+      if (part === "") return []
+      extra.push(part)
+    }
+  }
+  var id = String(terminalId || "").toLowerCase()
+  if (id.indexOf("ghostty") !== -1) {
+    var ghostty = ["setsid", "uwsm-app", "--", "ghostty", "+new-window", "--working-directory=" + dir]
+    if (extra.length === 0) return ghostty
+    ghostty.push("-e")
+    for (var g = 0; g < extra.length; g++) ghostty.push(extra[g])
+    return ghostty
+  }
+  if (id !== "") {
+    var other = ["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + dir]
+    if (extra.length === 0) return other
+    other.push("--")
+    for (var o = 0; o < extra.length; o++) other.push(extra[o])
+    return other
+  }
+  var exe = String(shell || "").trim()
+  if (exe === "") exe = "bash"
+  var fallback = [
+    "setsid", "uwsm-app", "--",
+    "xdg-terminal-exec", "--dir=" + dir, "--",
+    "env", "-C", dir, "--"
+  ]
+  if (extra.length === 0) {
+    fallback.push(exe)
+    return fallback
+  }
+  for (var f = 0; f < extra.length; f++) fallback.push(extra[f])
+  return fallback
+}
+
 function omafileConfirmMessage(project, action) {
   var path = ""
   if (project) path = String(project.displayPath || project.path || "")
