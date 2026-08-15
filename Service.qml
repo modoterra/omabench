@@ -106,7 +106,9 @@ Item {
 
   function openTerminal(project) {
     if (!project || !project.path) return
-    Util.execDetached("setsid uwsm-app -- xdg-terminal-exec --dir=" + Util.shellQuote(project.path))
+    var command = Model.terminalLaunchArgv(project.path, Quickshell.env("SHELL") || "bash")
+    if (command.length === 0) return
+    Quickshell.execDetached(command)
     flash("Opened terminal")
   }
 
@@ -144,8 +146,8 @@ Item {
 
   function executeOmafileArgv(project, argv, label) {
     if (!project || !project.path || !argv || argv.length === 0) return
-    var command = ["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + String(project.path), "--"]
-    for (var i = 0; i < argv.length; i++) command.push(String(argv[i]))
+    var command = Model.terminalLaunchArgv(project.path, Quickshell.env("SHELL") || "bash", argv)
+    if (command.length === 0) return
     Quickshell.execDetached(command)
     flash("Running " + (label || argv.join(" ")))
   }

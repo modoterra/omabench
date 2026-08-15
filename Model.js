@@ -299,6 +299,34 @@ function actionList(project) {
   return builtinActionList(project).concat(projectActionList(project))
 }
 
+function terminalLaunchArgv(path, shell, commandArgv) {
+  var dir = String(path || "")
+  if (dir === "") return []
+  var launch = [
+    "setsid",
+    "uwsm-app",
+    "--",
+    "xdg-terminal-exec",
+    "--dir=" + dir,
+    "--",
+    "env",
+    "-C",
+    dir,
+    "--"
+  ]
+  if (Array.isArray(commandArgv) && commandArgv.length > 0) {
+    for (var i = 0; i < commandArgv.length; i++) {
+      var part = String(commandArgv[i] || "")
+      if (part === "") return []
+      launch.push(part)
+    }
+    return launch
+  }
+  var exe = String(shell || "").trim()
+  launch.push(exe === "" ? "bash" : exe)
+  return launch
+}
+
 function omafileConfirmMessage(project, action) {
   var path = ""
   if (project) path = String(project.displayPath || project.path || "")
