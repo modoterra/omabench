@@ -8,8 +8,8 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "modoterra.omabench"
-  ipcTarget: "modoterra.omabench"
+  moduleName: "com.mdtrr.omabench"
+  ipcTarget: "com.mdtrr.omabench"
   manageIpc: false
 
   property bool cursorActive: false

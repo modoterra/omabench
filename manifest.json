@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "id": "modoterra.omabench",
+  "id": "com.mdtrr.omabench",
   "name": "Omabench",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "author": "Christoffer Hallas",
   "license": "MIT",
   "description": "A live overview of every git project under ~/Work: branch, dirty state, ahead/behind, and listening ports.",
