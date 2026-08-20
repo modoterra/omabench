@@ -15,7 +15,7 @@ omarchy plugin add https://github.com/modoterra/omabench.git --enable
 The widget lands on the right of the bar. Move it with:
 
 ```sh
-omarchy bar move modoterra.omabench --section right
+omarchy bar move com.mdtrr.omabench --section right
 ```
 
 ## Usage
@@ -36,11 +36,11 @@ Inside the panel:
 
 ## Configure
 
-The default work folder is `~/Work`. Point it somewhere else in `~/.config/omarchy/shell.json` on the `modoterra.omabench` bar entry:
+The default work folder is `~/Work`. Point it somewhere else in `~/.config/omarchy/shell.json` on the `com.mdtrr.omabench` bar entry:
 
 ```json
 {
-  "id": "modoterra.omabench",
+  "id": "com.mdtrr.omabench",
   "workRoot": "~/Work",
   "refreshIntervalSec": 8,
   "maxDepth": 6
@@ -78,5 +78,5 @@ A broken or rejected `Omafile` is shown on that row. Omabench still lists the pr
 ## Remove
 
 ```sh
-omarchy plugin remove modoterra.omabench
+omarchy plugin remove com.mdtrr.omabench
 ```
